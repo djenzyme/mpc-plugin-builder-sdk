@@ -957,8 +957,10 @@ jobs:
           }
           MPC_EOF
           python tools/build.py "$D"
-          python tools/package.py "$D"
+          mkdir -p out
+          cp -r "$D/build/ArpLab - VST - MPC Arp" out/
+          ls -R out | head -40
       - uses: actions/upload-artifact@v4
         with:
           name: mpc-arp
-          path: plugins/MPC Arp/dist/*.zip
+          path: out
