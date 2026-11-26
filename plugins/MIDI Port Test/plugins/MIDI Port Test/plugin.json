@@ -1,0 +1,17 @@
+{
+  "name": "MIDI Port Test",
+  "manufacturer": "ArpLab",
+  "version": "1.0.0",
+  "format": "vst2",
+  "kind": "instrument",
+  "uid": "AplT",
+  "numInputs": 0,
+  "numOutputs": 2,
+  "category": "Synth",
+  "file32": "VST/midi-port-test-arm32.so",
+  "file64": "VST/midi-port-test-arm64.so",
+  "description": "Opens a virtual ALSA MIDI port (via dlopen) to test MIDI output on MPC standalone. Silent; forwards track MIDI and has a test beat.",
+  "author": "ArpLab",
+  "url": "",
+  "license": "MIT"
+}
