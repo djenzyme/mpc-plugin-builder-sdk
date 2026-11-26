@@ -1,0 +1,964 @@
+name: Build MPC Arp
+
+# One-file build: writes the plugin source into the repo, builds it for the MPC
+# (32-bit and 64-bit ARM), validates it and uploads a zip as an artifact.
+# Runs on every push, or press "Run workflow" on the Actions tab.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write plugin files, build, validate, package
+        run: |
+          set -e
+          D='plugins/MPC Arp'
+          mkdir -p "$D/src"
+          cat > "$D/src/arp_engine.h" <<'MPC_EOF'
+          // arp_engine.h - host-independent arpeggiator core for an MPC plugin.
+          // Header-only, C++17, no allocation or locks in process().
+          //
+          // Behaviour
+          //   * Held notes are kept sorted low->high. Step n plays held[n % chordSize].
+          //   * Each step adds a semitone offset: offset[n % length].
+          //   * length (1..16) is the pattern length in steps, so odd lengths such as 7
+          //     make the offsets cycle against the chord and against the bar.
+          //   * latch OFF: step index restarts at every bar (locked to the sequencer).
+          //   * latch ON : step index free-runs across bars (decoupled), so a 7-step
+          //                pattern drifts against the 16-step bar (polymeter).
+          //   * Per-step: semitone offset, velocity, note length and on/off (off = rest; the step
+          //     still advances so the pattern keeps its timing).
+          //   * direction: Up, Down, UpDown, Random, AsPlayed - picks which chord note
+          //     each step starts from.
+          //   * hold: notes stay in the chord after the keys are released
+          //           (a new chord replaces them on the next fresh key press).
+          #pragma once
+          #include <algorithm>
+          #include <array>
+          #include <atomic>
+          #include <cmath>
+          #include <cstdint>
+
+          namespace arp {
+
+          constexpr int kMaxSteps   = 16;
+          constexpr int kMaxHeld    = 16;
+          constexpr int kMaxPending = 32;
+          constexpr int kMaxEvents  = 64;
+
+          struct MidiOut {
+              int     frame;  // sample offset inside the current block
+              bool    on;
+              uint8_t note;
+              uint8_t vel;
+          };
+
+          enum class Dir : int { Up = 0, Down, UpDown, Random, AsPlayed };
+
+          // Written from the UI / Q-Link thread, read from the audio thread.
+          struct Params {
+              std::atomic<int>   length{8};        // 1..kMaxSteps
+              std::atomic<bool>  latch{false};     // true = decoupled from bar
+              std::atomic<bool>  hold{false};      // keep chord after key release
+              std::atomic<float> stepBeats{0.25f}; // 0.25 = 1/16 note
+              std::atomic<float> gate{0.5f};       // fraction of a step, 0.05..1
+              std::atomic<int>   direction{(int)Dir::Up};
+              std::array<std::atomic<int>,  kMaxSteps> offset;    // semitones, -24..+24
+              std::array<std::atomic<int>,  kMaxSteps> velocity;  // 1..127
+              std::array<std::atomic<int>,  kMaxSteps> stepLen;   // note length per step, percent of gate (10..200)
+              std::array<std::atomic<bool>, kMaxSteps> stepOn;    // false = rest
+
+              Params() {
+                  for (auto& o : offset)   o.store(0);
+                  for (auto& v : velocity) v.store(100);
+                  for (auto& l : stepLen)  l.store(100);
+                  for (auto& s : stepOn)   s.store(true);
+              }
+          };
+
+          class Engine {
+          public:
+              Params p;
+
+              // ---- MIDI input (call from the audio thread) ----
+              void noteOn(uint8_t n) {
+                  if (n > 127) return;
+                  if (p.hold.load() && physicallyDown_ == 0) { heldCount_ = 0; orderCount_ = 0; }  // new chord
+                  if (!down_[n]) { down_[n] = true; ++physicallyDown_; }
+                  insertHeld(n);
+                  if (orderCount_ < kMaxHeld && !inOrder(n)) order_[orderCount_++] = n;
+              }
+              void noteOff(uint8_t n) {
+                  if (n > 127) return;
+                  if (down_[n]) { down_[n] = false; --physicallyDown_; }
+                  if (!p.hold.load()) removeHeld(n);
+              }
+
+              // Call on transport stop, bypass or plugin removal. Emits pending note-offs.
+              template <class Emit> void panic(Emit&& emit) {
+                  for (int i = 0; i < pendingCount_; ++i)
+                      emit(MidiOut{0, false, pending_[i].note, 0});
+                  pendingCount_ = 0;
+                  lastEnd_ = -1.0;
+              }
+
+              // blockStartBeats: host position in quarter notes at the first sample.
+              // emit(MidiOut) is called in sample order.
+              template <class Emit>
+              void process(double blockStartBeats, int frames, double sampleRate,
+                           double bpm, bool playing, double beatsPerBar, Emit&& emit) {
+                  if (!playing || bpm <= 0.0 || frames <= 0) {
+                      if (wasPlaying_) panic(emit);
+                      wasPlaying_ = false;
+                      return;
+                  }
+                  wasPlaying_ = true;
+
+                  const double bpf      = bpm / 60.0 / sampleRate;  // beats per frame
+                  const double blockEnd = blockStartBeats + frames * bpf;
+
+                  // Loop or locate: drop hanging notes.
+                  if (lastEnd_ >= 0.0 && std::fabs(blockStartBeats - lastEnd_) > 2.0 * bpf)
+                      panic(emit);
+                  lastEnd_ = blockEnd;
+
+                  const int   len   = std::clamp(p.length.load(), 1, kMaxSteps);
+                  const bool  latch = p.latch.load();
+                  const double step = std::max(0.0625, (double)p.stepBeats.load());
+                  const double gate = std::clamp((double)p.gate.load(), 0.05, 1.0);
+                  const Dir dir = (Dir)std::clamp(p.direction.load(), 0, 4);
+
+                  std::array<MidiOut, kMaxEvents> ev;
+                  int n = 0;
+                  auto push = [&](double beat, bool on, uint8_t note, uint8_t v) {
+                      if (n >= kMaxEvents) return;
+                      int f = (int)((beat - blockStartBeats) / bpf);
+                      ev[n++] = MidiOut{std::clamp(f, 0, frames - 1), on, note, v};
+                  };
+
+                  // Steps that start inside this block.
+                  long long k = (long long)std::ceil(blockStartBeats / step - 1e-9);
+                  for (; k * step < blockEnd - 1e-12; ++k) {
+                      const double beat = k * step;
+
+                      long long idx;
+                      if (latch) {
+                          idx = freeStep_++;
+                      } else {
+                          const double barStart = std::floor(beat / beatsPerBar + 1e-9) * beatsPerBar;
+                          idx = (long long)std::llround((beat - barStart) / step);
+                          freeStep_ = idx + 1;  // so switching latch on continues smoothly
+                      }
+
+                      if (heldCount_ == 0) continue;
+
+                      const int pos = (int)(idx % len);
+                      if (!p.stepOn[pos].load()) continue;  // rest
+
+                      int base = pickNote(dir, idx);
+                      int off  = p.offset[pos].load();
+                      uint8_t vel = (uint8_t)std::clamp(p.velocity[pos].load(), 1, 127);
+                      const double lenMul = std::clamp(p.stepLen[pos].load(), 10, 200) / 100.0;
+                      uint8_t note = (uint8_t)std::clamp(base + off, 0, 127);
+
+                      // Retrigger: close the same note first if it is still sounding.
+                      for (int i = 0; i < pendingCount_; ++i) {
+                          if (pending_[i].note == note) {
+                              push(beat, false, note, 0);
+                              pending_[i] = pending_[--pendingCount_];
+                              break;
+                          }
+                      }
+                      push(beat, true, note, vel);
+                      if (pendingCount_ < kMaxPending)
+                          pending_[pendingCount_++] = {beat + step * gate * lenMul, note};
+                  }
+
+                  // Note-offs that fall inside this block.
+                  for (int i = 0; i < pendingCount_;) {
+                      if (pending_[i].offBeat < blockEnd) {
+                          push(pending_[i].offBeat, false, pending_[i].note, 0);
+                          pending_[i] = pending_[--pendingCount_];
+                      } else {
+                          ++i;
+                      }
+                  }
+
+                  // Sort by frame; offs before ons on a tie.
+                  std::stable_sort(ev.begin(), ev.begin() + n,
+                      [](const MidiOut& a, const MidiOut& b) {
+                          return a.frame != b.frame ? a.frame < b.frame : (!a.on && b.on);
+                      });
+                  for (int i = 0; i < n; ++i) emit(ev[i]);
+              }
+
+          private:
+              struct Pending { double offBeat; uint8_t note; };
+
+              int pickNote(Dir d, long long idx) {
+                  const int sz = heldCount_;
+                  switch (d) {
+                      case Dir::Down:
+                          return held_[sz - 1 - (int)(idx % sz)];
+                      case Dir::UpDown: {
+                          const int period = std::max(1, 2 * sz - 2);
+                          const int q = (int)(idx % period);
+                          return held_[q < sz ? q : period - q];
+                      }
+                      case Dir::Random:
+                          rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5;
+                          return held_[rng_ % (uint32_t)sz];
+                      case Dir::AsPlayed:
+                          if (orderCount_ > 0) return order_[(int)(idx % orderCount_)];
+                          [[fallthrough]];
+                      case Dir::Up:
+                      default:
+                          return held_[(int)(idx % sz)];
+                  }
+              }
+              bool inOrder(uint8_t n) const {
+                  for (int i = 0; i < orderCount_; ++i) if (order_[i] == n) return true;
+                  return false;
+              }
+              void insertHeld(uint8_t n) {
+                  for (int i = 0; i < heldCount_; ++i) if (held_[i] == n) return;
+                  if (heldCount_ >= kMaxHeld) return;
+                  int i = heldCount_++;
+                  while (i > 0 && held_[i - 1] > n) { held_[i] = held_[i - 1]; --i; }
+                  held_[i] = n;
+              }
+              void removeHeld(uint8_t n) {
+                  for (int i = 0; i < heldCount_; ++i) {
+                      if (held_[i] == n) {
+                          for (int j = i; j < heldCount_ - 1; ++j) held_[j] = held_[j + 1];
+                          --heldCount_;
+                          break;
+                      }
+                  }
+                  for (int i = 0; i < orderCount_; ++i) {
+                      if (order_[i] == n) {
+                          for (int j = i; j < orderCount_ - 1; ++j) order_[j] = order_[j + 1];
+                          --orderCount_;
+                          return;
+                      }
+                  }
+              }
+
+              std::array<uint8_t, kMaxHeld>    held_{};
+              int                              heldCount_ = 0;
+              std::array<uint8_t, kMaxHeld>    order_{};  // press order
+              int                              orderCount_ = 0;
+              uint32_t                         rng_ = 0x9E3779B9u;
+              std::array<bool, 128>            down_{};
+              int                              physicallyDown_ = 0;
+              std::array<Pending, kMaxPending> pending_{};
+              int                              pendingCount_ = 0;
+              long long                        freeStep_ = 0;
+              double                           lastEnd_ = -1.0;
+              bool                             wasPlaying_ = false;
+          };
+
+          }  // namespace arp
+          MPC_EOF
+          cat > "$D/src/MPCArp.cpp" <<'MPC_EOF'
+          // MPC Arp - Kirnu-style step arpeggiator for the Akai MPC (standalone), by ArpLab.
+          //
+          // An instrument plugin: put it on a track, play a chord on that track, and the
+          // arp sends its notes out of a virtual ALSA MIDI port named "MPC Arp". Select
+          // that port as the MIDI input of another instrument track to hear it.
+          // (The official host discards plugin MIDI output, so the port is opened with
+          // dlopen()'d libasound, the same trick the community "Acid" plugin uses.)
+          //
+          // Engine: arp_engine.h (host independent). This file = parameters + ALSA output.
+          // Sync: Bar (restart each bar), Free (step counter free-runs, locked to host beats),
+          // Detached (own clock, ignores the sequencer). Stopped transport also uses the internal clock.
+
+          #include "mpc_plugin.h"
+          #include "arp_engine.h"
+
+          #include <dlfcn.h>
+          #include <cstdint>
+          #include <cstring>
+
+          namespace {
+
+          struct AlsaAddr { uint8_t client, port; };
+          struct AlsaEvent
+          {
+              uint8_t  type, flags, tag, queue;
+              uint32_t time[2];
+              AlsaAddr source, dest;
+              union
+              {
+                  struct { uint8_t channel, note, velocity, offVelocity; uint32_t duration; } note;
+                  struct { uint8_t channel, unused[3]; uint32_t param; int32_t value; } control;
+                  uint8_t raw[12];
+              } data;
+          };
+          static_assert(sizeof(AlsaEvent) == 28, "AlsaEvent must match snd_seq_event_t (28 bytes)");
+
+          constexpr uint8_t kEvNoteOn = 6, kEvNoteOff = 7, kEvController = 10, kEvPgmChange = 11,
+                            kEvChanPress = 12, kEvPitchBend = 13;
+          constexpr uint8_t kQueueDirect = 253, kAddrSubscribers = 254, kAddrUnknown = 253;
+          constexpr int      kOpenOutput = 1, kOpenNonblock = 1;
+          constexpr unsigned kPortCaps = 1u | 32u;
+          constexpr unsigned kPortType = 2u | (1u << 20);
+
+          typedef int (*FnOpen)(void** seq, const char* name, int streams, int mode);
+          typedef int (*FnSetName)(void* seq, const char* name);
+          typedef int (*FnCreatePort)(void* seq, const char* name, unsigned caps, unsigned type);
+          typedef int (*FnOutput)(void* seq, AlsaEvent* ev);
+          typedef int (*FnDrain)(void* seq);
+          typedef int (*FnClose)(void* seq);
+
+          enum Status { kIdle = 0, kPortOpen, kNoLib, kNoSymbols, kOpenFailed, kPortFailed };
+
+          // Parameter layout. Index 0 is nudged by the host on every prepare: Port Status is harmless.
+          enum ParamIndex
+          {
+              kStatus = 0, kSteps, kRate, kGate, kDirection, kSync, kHold, kOutChan, kPassCC,
+              kOffsetBase,                                   // 16 x semitone offset
+              kLenBase = kOffsetBase + arp::kMaxSteps,       // 16 x note length (% of gate)
+              kVelBase = kLenBase + arp::kMaxSteps,          // 16 x velocity
+              kOnBase  = kVelBase + arp::kMaxSteps,          // 16 x step on/off
+              kNumParams = kOnBase + arp::kMaxSteps
+          };
+
+          const float kRateBeats[7] = { 0.125f, 1.0f / 6.0f, 0.25f, 1.0f / 3.0f, 0.5f, 2.0f / 3.0f, 1.0f };
+
+          } // namespace
+
+          class MPCArp : public mpc::Plugin
+          {
+          public:
+              MPCArp() : mpc::Plugin(makeInfo())
+              {
+                  addParam(mpc::choiceParam("status", "Port Status",
+                           {"Not opened", "Port open", "No libasound", "Missing funcs", "Seq open fail", "Port fail"}, 0));
+                  addParam(mpc::intParam   ("steps",  "Steps", 1, 16, 8));
+                  addParam(mpc::choiceParam("rate",   "Rate", {"1/32", "1/16T", "1/16", "1/8T", "1/8", "1/4T", "1/4"}, 2));
+                  addParam(mpc::floatParam ("gate",   "Gate", 5.0f, 100.0f, 50.0f, "%", 0));
+                  addParam(mpc::choiceParam("dir",    "Direction", {"Up", "Down", "UpDown", "Random", "AsPlayed"}, 0));
+                  addParam(mpc::choiceParam("sync",   "Sync", {"Bar", "Free", "Detached"}, 0));
+                  addParam(mpc::boolParam  ("hold",   "Hold", false));
+                  addParam(mpc::intParam   ("chan",   "Out Chan", 1, 16, 1));
+                  addParam(mpc::boolParam  ("passcc", "Pass CC", true));
+                  for (int i = 0; i < arp::kMaxSteps; ++i)
+                      addParam(mpc::intParam(("off"  + std::to_string(i + 1)).c_str(), ("Off " + std::to_string(i + 1)).c_str(), -24, 24, 0, "st"));
+                  for (int i = 0; i < arp::kMaxSteps; ++i)
+                      addParam(mpc::intParam(("len"  + std::to_string(i + 1)).c_str(), ("Len " + std::to_string(i + 1)).c_str(), 10, 200, 100, "%"));
+                  for (int i = 0; i < arp::kMaxSteps; ++i)
+                      addParam(mpc::intParam(("vel"  + std::to_string(i + 1)).c_str(), ("Vel " + std::to_string(i + 1)).c_str(), 1, 127, 100));
+                  for (int i = 0; i < arp::kMaxSteps; ++i)
+                      addParam(mpc::boolParam(("on"  + std::to_string(i + 1)).c_str(), ("On " + std::to_string(i + 1)).c_str(), true));
+
+                  std::vector<float> init(kNumParams, 0.0f);
+                  init[kStatus] = 0; init[kSteps] = 8; init[kRate] = 2; init[kGate] = 50; init[kDirection] = 0;
+                  init[kSync] = 0; init[kHold] = 0; init[kOutChan] = 1; init[kPassCC] = 1;
+                  for (int i = 0; i < arp::kMaxSteps; ++i) { init[kOffsetBase + i] = 0; init[kVelBase + i] = 100; init[kLenBase + i] = 100; init[kOnBase + i] = 1; }
+                  addProgram("Init", init);
+
+                  // A 7-step example: octave jumps, a rest and an accent. Latch on = polymeter.
+                  std::vector<float> demo = init;
+                  demo[kSteps] = 7; demo[kSync] = 1;
+                  const int offs[7] = {0, 12, -12, 0, 7, 0, 5};
+                  for (int i = 0; i < 7; ++i) demo[kOffsetBase + i] = (float)offs[i];
+                  demo[kLenBase + 1] = 50; demo[kLenBase + 4] = 150;   // short octave hop, tied-ish fifth
+                  demo[kOnBase + 3] = 0; demo[kVelBase + 0] = 127; demo[kVelBase + 4] = 60;
+                  addProgram("7-Step Poly", demo);
+
+                  // Same pattern, but on its own clock: keeps running when the sequencer stops.
+                  std::vector<float> det = demo;
+                  det[kSync] = 2; det[kHold] = 1;
+                  addProgram("Detached 7", det);
+              }
+
+              ~MPCArp() override { closePort(); }
+
+              // UI thread.
+              void prepare(double sampleRate, int maxBlockSize) override
+              {
+                  (void)maxBlockSize;
+                  sampleRate_ = sampleRate;
+                  if (!portReady_.load() && lib_ == nullptr) openPort();
+                  set(kStatus, (float)status_);
+              }
+
+              void reset() override { resetPending_.store(true, std::memory_order_release); }
+
+              void process(mpc::ProcessContext& ctx) override
+              {
+                  if (!portReady_.load(std::memory_order_acquire)) return;
+                  const int ch = mpc::clamp(getInt(kOutChan), 1, 16) - 1;
+                  if (ch != lastChan_) {                      // channel changed: release the old one
+                      if (lastChan_ >= 0) allNotesOffOn(lastChan_);
+                      engine_.panic([](const arp::MidiOut&) {});
+                      lastChan_ = ch;
+                  }
+                  bool sent = false;
+
+                  if (resetPending_.exchange(false, std::memory_order_acq_rel)) {
+                      engine_.panic([&](const arp::MidiOut&) {});
+                      allNotesOffOn(ch);
+                      sent = true;
+                  }
+
+                  syncParams();
+
+                  // Input: notes feed the engine; CC / bend / pressure optionally pass through.
+                  const bool passCC = getBool(kPassCC);
+                  for (int i = 0; i < ctx.numMidiEvents; ++i) {
+                      const mpc::MidiEvent& e = ctx.midi[i];
+                      if (e.isNoteOn() && e.velocity() > 0) engine_.noteOn((uint8_t)e.note());
+                      else if (e.isNoteOn() || e.isNoteOff()) engine_.noteOff((uint8_t)e.note());
+                      else if (passCC) sent |= forward(e, ch);
+                  }
+
+                  // Clock. Bar / Free follow the host position while it plays. Detached ignores the
+                  // sequencer completely (start, stop, loop, locate) and runs on an internal clock at
+                  // the host tempo, so the pattern keeps going while you feed it new chords.
+                  const mpc::Transport& t = ctx.transport;
+                  const double bpm = (t.valid && t.tempoValid && t.bpm > 1.0) ? t.bpm : 120.0;
+                  const double bpf = bpm / 60.0 / ctx.sampleRate;
+                  double beatsPerBar = 4.0;
+                  if (t.valid && t.timeSigDenominator > 0)
+                      beatsPerBar = t.timeSigNumerator * 4.0 / t.timeSigDenominator;
+
+                  const bool detached = getInt(kSync) == 2;
+                  double pos;
+                  if (!detached && t.valid && t.playing && t.ppqValid) { pos = t.ppqPos; internalPos_ = pos + ctx.numFrames * bpf; }
+                  else { pos = internalPos_; internalPos_ += ctx.numFrames * bpf; }
+
+                  engine_.process(pos, ctx.numFrames, ctx.sampleRate, bpm, true, beatsPerBar,
+                      [&](const arp::MidiOut& m) {
+                          sent |= sendNote(m.on, ch, m.note, m.vel);
+                      });
+
+                  if (sent) drain_(seq_);
+              }
+
+          private:
+              static mpc::PluginInfo makeInfo()
+              {
+                  mpc::PluginInfo info;
+                  info.name         = "MPC Arp";
+                  info.vendor       = "ArpLab";
+                  info.uniqueId     = MPC_FOURCC('A', 'p', 'l', 'A');
+                  info.version      = 1000;
+                  info.isInstrument = true;
+                  info.numInputs    = 0;
+                  info.numOutputs   = 2;
+                  info.tailSamples  = 0;
+                  return info;
+              }
+
+              void syncParams()
+              {
+                  arp::Params& p = engine_.p;
+                  p.length.store(getInt(kSteps));
+                  p.latch.store(getInt(kSync) != 0);   // Free and Detached: step counter never restarts
+                  p.hold.store(getBool(kHold));
+                  p.stepBeats.store(kRateBeats[mpc::clamp(getInt(kRate), 0, 6)]);
+                  p.gate.store(get(kGate) / 100.0f);
+                  p.direction.store(getInt(kDirection));
+                  for (int i = 0; i < arp::kMaxSteps; ++i) {
+                      p.offset[i].store(getInt(kOffsetBase + i));
+                      p.velocity[i].store(getInt(kVelBase + i));
+                      p.stepLen[i].store(getInt(kLenBase + i));
+                      p.stepOn[i].store(getBool(kOnBase + i));
+                  }
+              }
+
+              // ---- ALSA plumbing (same as the verified MIDI Port Test) ----------------
+              void openPort()
+              {
+                  lib_ = dlopen("libasound.so.2", RTLD_NOW | RTLD_LOCAL);
+                  if (!lib_) lib_ = dlopen("libasound.so", RTLD_NOW | RTLD_LOCAL);
+                  if (!lib_) { status_ = kNoLib; return; }
+
+                  FnOpen       open_   = (FnOpen)      dlsym(lib_, "snd_seq_open");
+                  FnSetName    setName = (FnSetName)   dlsym(lib_, "snd_seq_set_client_name");
+                  FnCreatePort mkPort  = (FnCreatePort)dlsym(lib_, "snd_seq_create_simple_port");
+                  output_ = (FnOutput)dlsym(lib_, "snd_seq_event_output");
+                  drain_  = (FnDrain) dlsym(lib_, "snd_seq_drain_output");
+                  close_  = (FnClose) dlsym(lib_, "snd_seq_close");
+                  if (!open_ || !setName || !mkPort || !output_ || !drain_ || !close_)
+                  { status_ = kNoSymbols; dlclose(lib_); lib_ = nullptr; return; }
+
+                  if (open_(&seq_, "default", kOpenOutput, kOpenNonblock) < 0 || !seq_)
+                  { seq_ = nullptr; status_ = kOpenFailed; dlclose(lib_); lib_ = nullptr; return; }
+
+                  setName(seq_, "MPC Arp");
+                  int port = mkPort(seq_, "Out", kPortCaps, kPortType);
+                  if (port < 0)
+                  { close_(seq_); seq_ = nullptr; status_ = kPortFailed; dlclose(lib_); lib_ = nullptr; return; }
+
+                  port_ = (uint8_t)port;
+                  status_ = kPortOpen;
+                  portReady_.store(true, std::memory_order_release);
+              }
+
+              void closePort()
+              {
+                  if (portReady_.load()) {
+                      portReady_.store(false, std::memory_order_release);   // stop process() first
+                      allNotesOffOn(lastChan_ >= 0 ? lastChan_ : 0);
+                  }
+                  if (seq_ && close_) close_(seq_);
+                  seq_ = nullptr;
+                  if (lib_) dlclose(lib_);
+                  lib_ = nullptr;
+              }
+
+              bool push(AlsaEvent& ev)
+              {
+                  ev.queue = kQueueDirect;
+                  ev.source.port = port_;
+                  ev.dest.client = kAddrSubscribers;
+                  ev.dest.port = kAddrUnknown;
+                  return output_(seq_, &ev) >= 0;
+              }
+              bool sendNote(bool on, int ch, int note, int vel)
+              {
+                  AlsaEvent ev; std::memset(&ev, 0, sizeof ev);
+                  ev.type = on ? kEvNoteOn : kEvNoteOff;
+                  ev.data.note.channel = (uint8_t)ch;
+                  ev.data.note.note = (uint8_t)note;
+                  ev.data.note.velocity = (uint8_t)vel;
+                  return push(ev);
+              }
+              bool sendControl(uint8_t type, int ch, int param, int value)
+              {
+                  AlsaEvent ev; std::memset(&ev, 0, sizeof ev);
+                  ev.type = type;
+                  ev.data.control.channel = (uint8_t)ch;
+                  ev.data.control.param = (uint32_t)param;
+                  ev.data.control.value = value;
+                  return push(ev);
+              }
+              bool forward(const mpc::MidiEvent& e, int ch)
+              {
+                  if (e.isController()) {
+                      if (e.controller() == 64) return false;     // sustain is the arp's business, not the synth's
+                      return sendControl(kEvController, ch, e.controller(), e.controllerValue());
+                  }
+                  if (e.isPitchBend())     return sendControl(kEvPitchBend, ch, 0, e.pitchBend());
+                  if (e.isAftertouch())    return sendControl(kEvChanPress, ch, 0, e.data[1]);
+                  if (e.isProgramChange()) return sendControl(kEvPgmChange, ch, 0, e.data[1]);
+                  return false;
+              }
+              void allNotesOffOn(int ch)
+              {
+                  if (!seq_ || !drain_) return;
+                  sendControl(kEvController, ch, 123, 0);
+                  sendControl(kEvController, ch, 120, 0);
+                  drain_(seq_);
+              }
+
+              arp::Engine  engine_;
+              double       sampleRate_ = 44100.0;
+              double       internalPos_ = 0.0;
+              int          lastChan_ = -1;
+              std::atomic<bool> resetPending_{false};
+
+              void*        lib_ = nullptr;
+              void*        seq_ = nullptr;
+              FnOutput     output_ = nullptr;
+              FnDrain      drain_  = nullptr;
+              FnClose      close_  = nullptr;
+              uint8_t      port_ = 0;
+              int          status_ = kIdle;
+              std::atomic<bool> portReady_{false};
+          };
+
+          MPC_PLUGIN_ENTRY(MPCArp)
+          MPC_EOF
+          cat > "$D/plugin.json" <<'MPC_EOF'
+          {
+            "name": "MPC Arp",
+            "manufacturer": "ArpLab",
+            "version": "1.0.0",
+            "format": "vst2",
+            "kind": "instrument",
+            "uid": "AplA",
+            "numInputs": 0,
+            "numOutputs": 2,
+            "category": "Synth",
+            "file32": "VST/mpc-arp-arm32.so",
+            "file64": "VST/mpc-arp-arm64.so",
+            "description": "Kirnu-style step arpeggiator. Play a chord on this track; it opens a MIDI port you select as the input of another instrument track.",
+            "author": "ArpLab",
+            "url": "",
+            "license": "MIT"
+          }
+          MPC_EOF
+          cat > "$D/ui.json" <<'MPC_EOF'
+          {
+            "kit": "mpc-red",
+            "qlinkGroups": "rows",
+            "pages": [
+              {
+                "name": "ARP",
+                "controls": [
+                  {
+                    "param": "Steps",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Rate",
+                    "widget": "knob",
+                    "overlay": "menu"
+                  },
+                  {
+                    "param": "Gate",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Direction",
+                    "widget": "knob",
+                    "overlay": "menu"
+                  },
+                  {
+                    "param": "Sync",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "Hold",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "Out Chan",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Pass CC",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "Port Status",
+                    "widget": "knob",
+                    "overlay": "menu"
+                  },
+                  "empty",
+                  "empty",
+                  "empty",
+                  "empty",
+                  "empty",
+                  "empty",
+                  "empty"
+                ]
+              },
+              {
+                "name": "STEPS",
+                "controls": [
+                  {
+                    "param": "On 1",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 2",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 3",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 4",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 5",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 6",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 7",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 8",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 9",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 10",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 11",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 12",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 13",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 14",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 15",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "On 16",
+                    "widget": "switch"
+                  }
+                ]
+              },
+              {
+                "name": "OFFSET",
+                "controls": [
+                  {
+                    "param": "Off 1",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 2",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 3",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 4",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 5",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 6",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 7",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 8",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 9",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 10",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 11",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 12",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 13",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 14",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 15",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  },
+                  {
+                    "param": "Off 16",
+                    "widget": "knob",
+                    "polarity": "bipolar"
+                  }
+                ]
+              },
+              {
+                "name": "LENGTH",
+                "controls": [
+                  {
+                    "param": "Len 1",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 2",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 3",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 4",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 5",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 6",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 7",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 8",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 9",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 10",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 11",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 12",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 13",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 14",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 15",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Len 16",
+                    "widget": "fader"
+                  }
+                ]
+              },
+              {
+                "name": "VELOC",
+                "controls": [
+                  {
+                    "param": "Vel 1",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 2",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 3",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 4",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 5",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 6",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 7",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 8",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 9",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 10",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 11",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 12",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 13",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 14",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 15",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Vel 16",
+                    "widget": "fader"
+                  }
+                ]
+              }
+            ],
+            "style": {
+              "background": "ff1e1d1e",
+              "accent": "ffd31145",
+              "text": "ffffffff",
+              "muted": "ff6a6a6c"
+            }
+          }
+          MPC_EOF
+          python tools/build.py "$D"
+          python tools/package.py "$D"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpc-arp
+          path: plugins/MPC Arp/dist/*.zip
