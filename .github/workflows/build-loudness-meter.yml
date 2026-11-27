@@ -1,0 +1,1924 @@
+name: Build Loudness Meter
+
+# One-file setup: this workflow writes the whole Loudness Meter project (code, UI layout and the brushed
+# silver skin generator, which also draws the meters, the logo, title and button names) into
+# plugins/Loudness Meter/ on the build server, then builds and validates it.
+# To change the plugin later, edit the file contents below.
+
+on:
+  push:
+  workflow_dispatch:   # lets you press "Run workflow" from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write plugin files
+        run: |
+          set -e
+          mkdir -p "plugins/Loudness Meter"
+          cd "plugins/Loudness Meter"
+          mkdir -p "$(dirname "plugin.json")"
+          cat > "plugin.json" <<'LMEOF'
+          {
+            "name": "Loudness Meter",
+            "manufacturer": "gltchsqnz",
+            "version": "1.0.0",
+            "format": "vst2",
+            "kind": "effect",
+            "uid": "GLdM",
+            "numInputs": 2,
+            "numOutputs": 2,
+            "category": "Effect",
+            "shortName": "Loudness",
+            "knobs": [
+              { "parameter": 1, "label": "Mode" },
+              { "parameter": 2, "label": "View" },
+              { "parameter": 0, "label": "Target" }
+            ],
+            "shiftKnobs": [
+              { "parameter": 5, "label": "VU Ref" },
+              { "parameter": 6, "label": "TP Limit" },
+              { "parameter": 4, "label": "Auto Rst" }
+            ],
+            "file32": "VST/loudness-meter-arm32.so",
+            "file64": "VST/loudness-meter-arm64.so",
+            "description": "Loudness and level meter: LUFS (momentary, short-term, integrated), LRA, PLR, true peak, sample peak, RMS and VU, with LED bars, a VU needle, precise readouts and platform targets.",
+            "author": "gltchsqnz",
+            "url": "",
+            "license": "MIT"
+          }
+          LMEOF
+          mkdir -p "$(dirname "ui.json")"
+          cat > "ui.json" <<'LMEOF'
+          {
+            "kit": "silver",
+            "qlinkGroups": "rows",
+            "style": {
+              "background": "ffc4c7cd",
+              "text": "ff16181b",
+              "muted": "ff3d4148"
+            },
+            "pages": [
+              {
+                "name": "METER",
+                "background": "silver_meter_bg.png",
+                "controls": [
+                  { "param": "Mode", "widget": "switch" },
+                  { "param": "View", "widget": "switch" },
+                  { "param": "Target", "widget": "knob", "overlay": "menu" },
+                  { "param": "Reset", "widget": "switch" }
+                ]
+              },
+              {
+                "name": "SETUP",
+                "background": "silver_setup_bg.png",
+                "controls": [
+                  { "param": "Auto Reset", "widget": "switch" },
+                  { "param": "VU Ref", "widget": "knob" },
+                  { "param": "TP Limit", "widget": "knob" }
+                ]
+              }
+            ]
+          }
+          LMEOF
+          mkdir -p "$(dirname "README.md")"
+          cat > "README.md" <<'LMEOF'
+          # Loudness Meter
+
+          A loudness and level meter for Akai MPC standalone, by gltchsqnz, in the spirit of the
+          Youlean Loudness Meter. Put it last on a track or the master: audio passes through untouched,
+          the plugin only measures.
+
+          Measurements follow ITU-R BS.1770-4 / EBU R128 and read within 0.1 LU of the EBU Tech 3341
+          reference signals (and exactly on the Tech 3342 LRA cases) at 44.1, 48 and 96 kHz.
+
+          ## The screen (METER tab)
+
+          - **Mode** buttons choose what the big readout and the two bars show:
+            - **dB**: sample peak in dBFS (bars = L / R peak, falling at 20 dB/s; readout = peak of the last 0.5 s)
+            - **TRUE PEAK**: 4x oversampled true peak in dBTP (same bars and readout, inter-sample peaks included)
+            - **LUFS**: loudness (bars = **M**omentary / **S**hort-term; readout = the loudness picked with **View**)
+          - **View**: MOM (momentary, 400 ms), SHORT (short-term, 3 s) or INT (integrated, gated, since the last reset)
+          - **Target**: the loudness target, with platform presets (-14 Spotify / YouTube / Amazon, -16 Apple / Podcast,
+            -15 Deezer, -23 EBU R128, -24 ATSC A/85, -18, -12, -10, -8 Club)
+          - **Reset**: restart the measurement (springs back by itself)
+          - **VU needle**: a classic VU (300 ms ballistics, 0 VU = **VU Ref**) in dB and True Peak modes; in LUFS mode it
+            shows momentary loudness relative to the Target in LU, so 0 on the dial means "on target"
+          - **Readout**: the large precise number, with an **OVER** lamp that latches when the true peak passes **TP Limit**
+          - **History**: short-term loudness over the last 60 s
+          - **Readings**: Integrated, Vs Target (integrated minus target), Short-term, Momentary, their maxima, LRA,
+            PLR (true-peak max minus integrated), True Peak max, Sample Peak max, RMS (300 ms), Target
+
+          ## SETUP tab
+
+          - **Auto Reset**: On restarts the measurement whenever the MPC starts playing
+          - **VU Ref**: the level that reads 0 VU (a sine peaking at this dBFS level), -24 to -8, default -18
+          - **TP Limit**: the true-peak ceiling for the OVER lamp, -6 to 0 dBTP, default -1
+
+          ## Parameters
+
+          | # | Name | |
+          |---|------|--|
+          | 0 | Target | target preset |
+          | 1 | Mode | dB / True Peak / LUFS |
+          | 2 | View | Momentary / Short-term / Integrated |
+          | 3 | Reset | momentary |
+          | 4 | Auto Reset | Off / On |
+          | 5 | VU Ref | dBFS |
+          | 6 | TP Limit | dBTP |
+          | 7-22 | readings | written by the plugin, not automatable: Readout, Bar L, Bar R, Needle, Integrated, Vs Target, Short-term, Momentary, Short Max, Mom Max, LRA, PLR, True Peak, Sample Peak, RMS, TP Over |
+
+          Programs: Spotify, YouTube, Apple Music, EBU R128, ATSC A/85 (VU Ref -20, TP -2), Podcast, Club Master
+          (-8 target, True Peak mode, TP -0.3), Peak / VU (dB mode).
+
+          ## How the meters reach the screen
+
+          The MPC gives scripted skins no audio level of their own, so every reading is a parameter that the
+          plugin writes and reports to the host: the bars and needle about 30 times a second, the numbers 10 times
+          a second, each only when it has visibly changed. The skin binds film-strip images (LED bars, needle,
+          OVER lamp), text labels and a Plotter (history) to those parameters. For 0.3 s after a project or preset
+          load nothing is written, so the loaded state stays intact.
+
+          ## Measurement notes
+
+          - K-weighting coefficients are derived for the running sample rate (libebur128 formulas).
+          - Integrated loudness and LRA use 0.01 LU histograms, so memory stays fixed however long you measure.
+          - RMS is plain RMS (a full-scale sine reads -3.0 dBFS); VU uses the AES17 convention (a sine reads its peak level).
+          - True peak uses the 48-tap interpolator of BS.1770-4 Annex 2; a worst-case inter-sample sine reads +0.08 dBTP
+            high, within the standard's tolerance.
+          - Resuming playback or loading a preset does not clear the measurement; Reset (or Auto Reset) does.
+
+          ## Look
+
+          Brushed silver skin, blue Mode / View buttons with their names painted underneath, the gltchsqnz logo with
+          the title bottom right. `make_silver.py` draws it (LED bars, VU face, needle, panels, logo); `SHOW_HISTORY`
+          at the top of that file turns the history graph off if the MPC ever has trouble with it.
+
+          ## Knob FX mapping
+
+          The SDK requires effects to declare one. It only matters on an MPC Sample (which has no screen, so a
+          meter is of little use there): knobs Mode / View / Target; SHIFT + knobs VU Ref / TP Limit / Auto Reset.
+
+          ## Licence
+
+          MIT.
+          LMEOF
+          mkdir -p "$(dirname ".gitignore")"
+          cat > ".gitignore" <<'LMEOF'
+          build/
+          dist/
+          LMEOF
+          mkdir -p "$(dirname "src/LoudnessMeter.cpp")"
+          cat > "src/LoudnessMeter.cpp" <<'LMEOF'
+          // Loudness Meter - an MPC insert effect plugin by gltchsqnz
+          //
+          // A loudness / level meter in the spirit of Youlean Loudness Meter. Audio passes through untouched
+          // (bit-exact); the plugin only measures. The measuring core is LoudnessDsp.h (its header explains the
+          // maths: BS.1770-4 / EBU R128 loudness, LRA, 4x true peak, sample peak, RMS and VU ballistics).
+          //
+          // Signal flow:
+          //     in -> out (unchanged)
+          //      \-> K-weighting -> M / S / I loudness, LRA
+          //      \-> 4x oversampled true peak, sample peak, RMS, VU ballistics
+          //
+          // How the screen is driven: the MPC has no level feed from a plugin, so every reading is a parameter
+          // that the plugin writes itself (the "read-only" parameters below) and reports to the host. The skin
+          // binds its bars, needle, readouts and history graph to those parameters.
+          //   - bars and needle are refreshed about 30 times a second, numbers 10 times a second,
+          //   - a parameter is only re-sent when its value has visibly changed,
+          //   - for 0.3 s after a project / preset load nothing is written, so the loaded state stays intact.
+          //
+          // Parameters (order is permanent once released; append new ones at the END):
+          //   Controls
+          //   0 Target      loudness target preset (platform / standard). Harmless on load (the host nudges param 0).
+          //   1 Mode        what the big readout and the bars show: dB (sample peak, dBFS), True Peak (dBTP), LUFS
+          //   2 View        which loudness the big readout shows in LUFS mode: Momentary, Short-term, Integrated
+          //   3 Reset       press to restart the measurement (springs back to Off by itself)
+          //   4 Auto Reset  On: the measurement restarts whenever the MPC starts playing
+          //   5 VU Ref      the dBFS level that reads 0 VU (a sine peaking at this level)
+          //   6 TP Limit    true-peak ceiling: the OVER lamp lights when the true peak goes above it
+          //   Readings (written by the plugin, not automatable)
+          //   7 Readout     the big number (unit follows Mode)
+          //   8 Bar L       left bar  (dB / TP modes: channel level; LUFS mode: Momentary)
+          //   9 Bar R       right bar (dB / TP modes: channel level; LUFS mode: Short-term)
+          //  10 Needle      needle position: VU in dB / TP modes, Momentary relative to Target (LU) in LUFS mode
+          //  11 Integrated  12 Vs Target  13 Short-term  14 Momentary  15 Short Max  16 Mom Max
+          //  17 LRA         18 PLR (true peak max - integrated)  19 True Peak (max)  20 Sample Peak (max)  21 RMS
+          //  22 TP Over     latched when the true peak exceeds TP Limit (cleared by Reset)
+
+          #include "mpc_plugin.h"
+          #include "LoudnessDsp.h"
+
+          #include <algorithm>
+          #include <cmath>
+          #include <cstdio>
+          #include <cstring>
+
+          namespace {
+
+          enum ParamIndex
+          {
+              kTarget = 0, kMode, kView, kReset, kAutoReset, kVuRef, kTpLimit,
+              kReadout, kBarL, kBarR, kNeedle,
+              kInteg, kVsTarget, kShort, kMom, kShortMax, kMomMax, kLra, kPlr, kTpMax, kPeakMax, kRms, kOver,
+              kNumParams
+          };
+
+          enum Mode { kModeDb = 0, kModeTp, kModeLufs };
+          enum View { kViewMom = 0, kViewShort, kViewInteg };
+
+          struct TargetDef { const char* name; float lufs; };
+          const TargetDef kTargets[] = {
+              {"-23 EBU", -23.0f}, {"-24 ATSC", -24.0f}, {"-14 Spotify", -14.0f}, {"-14 YouTube", -14.0f},
+              {"-16 Apple", -16.0f}, {"-14 Amazon", -14.0f}, {"-15 Deezer", -15.0f}, {"-16 Podcast", -16.0f},
+              {"-18", -18.0f}, {"-12", -12.0f}, {"-10", -10.0f}, {"-8 Club", -8.0f},
+          };
+          constexpr int kNumTargets = (int)(sizeof(kTargets) / sizeof(kTargets[0]));
+          constexpr int kDefaultTarget = 2;     // -14 Spotify
+
+          // Ranges of the reading parameters (plain values). The bottom of each range means "nothing yet".
+          constexpr float kLoudLo = -70.0f, kLoudHi = 5.0f;     // LUFS readings
+          constexpr float kBarLo = -60.0f,  kBarHi = 3.0f;      // bars: 63 one-dB segments
+          constexpr float kPkLo = -70.0f,   kPkHi = 12.0f;      // peaks
+          constexpr float kLuLo = -1.0f,    kLuHi = 40.0f;      // LRA / PLR (-1 = undefined)
+          constexpr float kDevLo = -40.0f,  kDevHi = 40.0f;     // Vs Target (-40 = undefined)
+
+          // VU / LU needle scale: -20 .. +3, with the classic VU law (deflection follows voltage).
+          constexpr double kNeedleLo = -20.0, kNeedleHi = 3.0;
+          double needleFraction(double v)
+          {
+              const double lo = std::pow(10.0, kNeedleLo / 20.0), hi = std::pow(10.0, kNeedleHi / 20.0);
+              double f = (std::pow(10.0, v / 20.0) - lo) / (hi - lo);
+              return std::min(1.0, std::max(0.0, f));
+          }
+          double needleValue(double f)
+          {
+              const double lo = std::pow(10.0, kNeedleLo / 20.0), hi = std::pow(10.0, kNeedleHi / 20.0);
+              return 20.0 * std::log10(lo + std::max(0.0, f) * (hi - lo));
+          }
+
+          } // namespace
+
+          class LoudnessMeter : public mpc::Plugin
+          {
+          public:
+              LoudnessMeter() : mpc::Plugin(makeInfo())
+              {
+                  using namespace mpc;
+                  std::vector<std::string> targetNames;
+                  for (int i = 0; i < kNumTargets; ++i) targetNames.push_back(kTargets[i].name);
+
+                  // ids are saved in projects: never rename them once released.
+                  addParam(choiceParam("target",    "Target",     targetNames, kDefaultTarget));
+                  addParam(choiceParam("mode",      "Mode",       {"dB", "True Peak", "LUFS"}, kModeLufs));
+                  addParam(choiceParam("view",      "View",       {"Momentary", "Short-term", "Integrated"}, kViewShort));
+                  addParam(boolParam  ("reset",     "Reset",      false));
+                  addParam(choiceParam("autoreset", "Auto Reset", {"Off", "On"}, 0));
+                  addParam(floatParam ("vuref",     "VU Ref",     -24.0f, -8.0f, -18.0f, "dBFS", 1));
+                  addParam(floatParam ("tplimit",   "TP Limit",   -6.0f, 0.0f, -1.0f, "dBTP", 1));
+
+                  reading("readout",   "Readout",     kLoudLo, kLoudHi);
+                  reading("barl",      "Bar L",       kBarLo, kBarHi);
+                  reading("barr",      "Bar R",       kBarLo, kBarHi);
+                  reading("needle",    "Needle",      0.0f, 1.0f, 4);
+                  reading("integ",     "Integrated",  kLoudLo, kLoudHi);
+                  reading("vstarget",  "Vs Target",   kDevLo, kDevHi);
+                  reading("short",     "Short-term",  kLoudLo, kLoudHi);
+                  reading("mom",       "Momentary",   kLoudLo, kLoudHi);
+                  reading("shortmax",  "Short Max",   kLoudLo, kLoudHi);
+                  reading("mommax",    "Mom Max",     kLoudLo, kLoudHi);
+                  reading("lra",       "LRA",         kLuLo, kLuHi);
+                  reading("plr",       "PLR",         kLuLo, kLuHi);
+                  reading("tpmax",     "True Peak",   kPkLo, kPkHi);
+                  reading("peakmax",   "Sample Peak", kPkLo, kPkHi);
+                  reading("rms",       "RMS",         kPkLo, kPkHi);
+                  {
+                      Param p = boolParam("tpover", "TP Over", false);
+                      p.automatable = false;
+                      addParam(p);
+                  }
+
+                  // Built-in programs (plain values of the controls, in parameter order):
+                  //                         Target Mode       View        Reset AutoRst VURef  TPLimit
+                  addProgram("Spotify",      { 2.0f, kModeLufs, kViewInteg, 0.0f, 0.0f, -18.0f, -1.0f});
+                  addProgram("YouTube",      { 3.0f, kModeLufs, kViewInteg, 0.0f, 0.0f, -18.0f, -1.0f});
+                  addProgram("Apple Music",  { 4.0f, kModeLufs, kViewInteg, 0.0f, 0.0f, -18.0f, -1.0f});
+                  addProgram("EBU R128",     { 0.0f, kModeLufs, kViewInteg, 0.0f, 0.0f, -18.0f, -1.0f});
+                  addProgram("ATSC A/85",    { 1.0f, kModeLufs, kViewInteg, 0.0f, 0.0f, -20.0f, -2.0f});
+                  addProgram("Podcast",      { 7.0f, kModeLufs, kViewShort, 0.0f, 0.0f, -18.0f, -1.0f});
+                  addProgram("Club Master",  {11.0f, kModeTp,   kViewShort, 0.0f, 0.0f, -14.0f, -0.3f});
+                  addProgram("Peak / VU",    { 2.0f, kModeDb,   kViewShort, 0.0f, 0.0f, -18.0f, -1.0f});
+              }
+
+              void prepare(double sampleRate, int maxBlockSize) override
+              {
+                  (void)maxBlockSize;
+                  fs_ = sampleRate;
+                  meter_.prepare(sampleRate);
+                  fastLen_ = std::max(1, (int)std::lround(sampleRate / 30.0));
+                  barFallPerTick_ = 20.0f / 30.0f;            // bars fall at 20 dB per second
+                  readoutTicks_ = 15;                          // dB / TP readout: peak of the last 0.5 s (15 x 1/30 s)
+                  clearAll();
+                  quiet_ = 0;
+              }
+
+              void reset() override
+              {
+                  // Called on resume and after a state / preset load: keep the measurement, clear filter memories,
+                  // and stay quiet for a moment so freshly loaded parameter values are not overwritten at once.
+                  meter_.resetFilters();
+                  quiet_ = (int)(fs_ * 0.3);
+              }
+
+              bool formatValue(int index, float v, std::string& out) override
+              {
+                  char buf[48];
+                  switch (index)
+                  {
+                      case kReadout:
+                      {
+                          const int mode = getInt(kMode);
+                          const char* unit = mode == kModeDb ? "dBFS" : (mode == kModeTp ? "dBTP" : "LUFS");
+                          if (v <= kLoudLo + 0.05f) std::snprintf(buf, sizeof(buf), "-inf %s", unit);
+                          else std::snprintf(buf, sizeof(buf), "%.1f %s", (double)v, unit);
+                          out = clean(buf); return true;
+                      }
+                      case kBarL: case kBarR:
+                          out = v <= kBarLo + 0.05f ? "-inf" : clean(fmt(buf, sizeof(buf), "%.1f", v)); return true;
+                      case kNeedle:
+                      {
+                          double n = needleValue(v);
+                          if (std::fabs(n) < 0.05) n = 0.0;
+                          std::snprintf(buf, sizeof(buf), "%+.1f %s", n, getInt(kMode) == kModeLufs ? "LU" : "VU");
+                          out = buf; return true;
+                      }
+                      case kInteg: case kShort: case kMom: case kShortMax: case kMomMax:
+                          out = v <= kLoudLo + 0.05f ? "-inf LUFS" : clean(fmt(buf, sizeof(buf), "%.1f LUFS", v)); return true;
+                      case kVsTarget:
+                          if (v <= kDevLo + 0.05f) { out = "-"; return true; }
+                          if (std::fabs(v) < 0.05f) { out = "0.0 LU"; return true; }
+                          std::snprintf(buf, sizeof(buf), "%+.1f LU", (double)v); out = buf; return true;
+                      case kLra: case kPlr:
+                          out = v < 0.0f ? "-" : fmt(buf, sizeof(buf), "%.1f LU", v); return true;
+                      case kTpMax:
+                          out = v <= kPkLo + 0.05f ? "-inf dBTP" : clean(fmt(buf, sizeof(buf), "%.1f dBTP", v)); return true;
+                      case kPeakMax: case kRms:
+                          out = v <= kPkLo + 0.05f ? "-inf dBFS" : clean(fmt(buf, sizeof(buf), "%.1f dBFS", v)); return true;
+                      default:
+                          return false;
+                  }
+              }
+
+              void process(mpc::ProcessContext& ctx) override
+              {
+                  const int n = ctx.numFrames;
+                  const float* inL = ctx.inputs ? ctx.inputs[0] : nullptr;
+                  const float* inR = (ctx.inputs && ctx.numInputs > 1) ? ctx.inputs[1] : inL;
+
+                  // Audio passes through unchanged. With in-place processing the buffers are the same; otherwise copy.
+                  for (int c = 0; c < ctx.numOutputs; ++c)
+                  {
+                      const float* src = (c == 0) ? inL : inR;
+                      if (src && ctx.outputs[c] && ctx.outputs[c] != src) std::memcpy(ctx.outputs[c], src, sizeof(float) * (size_t)n);
+                  }
+                  if (!inL) return;
+
+                  // Controls
+                  if (getBool(kReset))
+                  {
+                      clearAll();
+                      publish(kReset, 0.0f, 0.5f, true);
+                  }
+                  const bool playing = ctx.transport.playing;
+                  if (playing && !wasPlaying_ && getInt(kAutoReset) == 1) clearAll();
+                  wasPlaying_ = playing;
+
+                  for (int i = 0; i < n; ++i)
+                  {
+                      const bool blockDone = meter_.frame(inL[i], inR[i]);
+                      if (++fastCount_ >= fastLen_) { fastCount_ = 0; fastTick(); }
+                      if (blockDone) slowTick();
+                  }
+                  if (quiet_ > 0) quiet_ = std::max(0, quiet_ - n);
+              }
+
+          private:
+              static mpc::PluginInfo makeInfo()
+              {
+                  mpc::PluginInfo i;
+                  i.name = "Loudness Meter";
+                  i.vendor = "gltchsqnz";
+                  i.uniqueId = MPC_FOURCC('G', 'L', 'd', 'M');
+                  i.version = 1000;
+                  i.isInstrument = false;
+                  i.numInputs = 2;
+                  i.numOutputs = 2;
+                  i.tailSamples = 1;
+                  return i;
+              }
+
+              void reading(const char* id, const char* name, float lo, float hi, int decimals = 1)
+              {
+                  mpc::Param p = mpc::floatParam(id, name, lo, hi, lo, "", decimals);
+                  p.automatable = false;
+                  addParam(p);
+              }
+
+              static const char* fmt(char* buf, size_t size, const char* f, float v)
+              {
+                  std::snprintf(buf, size, f, (double)v);
+                  return buf;
+              }
+              static std::string clean(const char* s)            // "-0.0 ..." -> "0.0 ..."
+              {
+                  if (s[0] == '-' && s[1] == '0' && s[2] == '.' && s[3] == '0' && (s[4] == 0 || s[4] == ' ')) return std::string(s + 1);
+                  return s;
+              }
+
+              float targetLufs() const { return kTargets[std::min(std::max(getInt(kTarget), 0), kNumTargets - 1)].lufs; }
+
+              // Write a reading and tell the host, if it moved by at least `step` (or `force`).
+              void publish(int idx, float plain, float step, bool force = false)
+              {
+                  if (quiet_ > 0 && !force) return;
+                  const mpc::Param& p = param(idx);
+                  plain = std::min(std::max(plain, std::fmin(p.min, p.max)), std::fmax(p.min, p.max));
+                  if (!force && std::fabs(get(idx) - plain) < step) return;
+                  set(idx, plain);
+                  notifyHostParameterChanged(idx);
+              }
+
+              static float lufsOrFloor(double l, float lo) { return l <= loud::kSilent + 1.0 ? lo : (float)l; }
+              static float dbOrFloor(double g, float lo) { double d = loud::gainToDb(g); return d <= loud::kSilent + 1.0 ? lo : (float)d; }
+
+              void clearAll()
+              {
+                  meter_.clear();
+                  barL_ = barR_ = kBarLo;
+                  needleF_ = 0.0;
+                  holdTicks_ = 0;
+                  holdPeak_ = holdTp_ = 0.0f;
+                  fastCount_ = 0;
+                  publish(kOver, 0.0f, 0.5f, true);
+                  for (int idx = kReadout; idx < kOver; ++idx)
+                  {
+                      const mpc::Param& p = param(idx);
+                      publish(idx, p.min, 0.0f, true);
+                  }
+              }
+
+              // ~30 Hz: bars, needle, dB / TP readout window
+              void fastTick()
+              {
+                  const int mode = getInt(kMode);
+                  meter_.notePeaks();
+                  float lvl[2];
+                  for (int c = 0; c < 2; ++c)
+                  {
+                      const float pk = (mode == kModeTp) ? meter_.winTp[c] : meter_.winPeak[c];
+                      lvl[c] = dbOrFloor(pk, kBarLo);
+                  }
+                  holdPeak_ = std::max(holdPeak_, std::max(meter_.winPeak[0], meter_.winPeak[1]));
+                  holdTp_ = std::max(holdTp_, std::max(meter_.winTp[0], meter_.winTp[1]));
+                  meter_.clearWindow();
+
+                  if (mode == kModeLufs)
+                  {
+                      barL_ = lufsOrFloor(meter_.momentary, kBarLo);
+                      barR_ = lufsOrFloor(meter_.shortTerm, kBarLo);
+                  }
+                  else
+                  {
+                      // instant attack, 20 dB/s fall
+                      barL_ = std::max(lvl[0], std::max(kBarLo, barL_ - barFallPerTick_));
+                      barR_ = std::max(lvl[1], std::max(kBarLo, barR_ - barFallPerTick_));
+                  }
+                  publish(kBarL, barL_, 0.25f);
+                  publish(kBarR, barR_, 0.25f);
+
+                  double target;
+                  if (mode == kModeLufs)
+                      target = meter_.momentary <= loud::kSilent + 1.0 ? -60.0 : meter_.momentary - targetLufs();
+                  else
+                      target = meter_.vuDbfs() - get(kVuRef);
+                  const double f = needleFraction(target);
+                  needleF_ += 0.5 * (f - needleF_);        // a little extra damping between updates
+                  publish(kNeedle, (float)needleF_, 0.002f);
+
+                  // Over lamp (latched)
+                  if (meter_.tpMax > 0.0f && loud::gainToDb(meter_.tpMax) > get(kTpLimit) + 1e-4 && !getBool(kOver))
+                      publish(kOver, 1.0f, 0.5f);
+
+                  // dB / TP readout: the peak of the last 0.5 s, refreshed every 0.5 s
+                  if (mode != kModeLufs && ++holdTicks_ >= readoutTicks_)
+                  {
+                      holdTicks_ = 0;
+                      publish(kReadout, dbOrFloor(mode == kModeTp ? holdTp_ : holdPeak_, kLoudLo), 0.05f);
+                      holdPeak_ = holdTp_ = 0.0f;
+                  }
+              }
+
+              // every 100 ms: loudness numbers
+              void slowTick()
+              {
+                  const loud::Meter& m = meter_;
+                  const float integ = lufsOrFloor(m.integrated, kLoudLo);
+                  const float tpDb = dbOrFloor(m.tpMax, kPkLo);
+                  publish(kInteg, integ, 0.05f);
+                  publish(kShort, lufsOrFloor(m.shortTerm, kLoudLo), 0.05f);
+                  publish(kMom, lufsOrFloor(m.momentary, kLoudLo), 0.05f);
+                  publish(kShortMax, lufsOrFloor(m.shortMax, kLoudLo), 0.05f);
+                  publish(kMomMax, lufsOrFloor(m.momMax, kLoudLo), 0.05f);
+                  publish(kLra, m.lra < 0.0 ? kLuLo : (float)m.lra, 0.05f);
+                  const bool haveI = integ > kLoudLo + 0.05f;
+                  publish(kPlr, (haveI && tpDb > kPkLo + 0.05f) ? std::max(0.0f, tpDb - integ) : kLuLo, 0.05f);
+                  publish(kVsTarget, haveI ? integ - targetLufs() : kDevLo, 0.05f);
+                  publish(kTpMax, tpDb, 0.05f);
+                  publish(kPeakMax, dbOrFloor(m.peakMax, kPkLo), 0.05f);
+                  publish(kRms, m.rms <= loud::kSilent + 1.0 ? kPkLo : (float)m.rms, 0.05f);
+
+                  if (getInt(kMode) == kModeLufs)
+                  {
+                      const int view = getInt(kView);
+                      const double l = view == kViewMom ? m.momentary : (view == kViewShort ? m.shortTerm : m.integrated);
+                      publish(kReadout, lufsOrFloor(l, kLoudLo), 0.05f);
+                  }
+              }
+
+              loud::Meter meter_;
+              double fs_ = 48000.0;
+              int fastLen_ = 1600, fastCount_ = 0;
+              float barFallPerTick_ = 0.67f;
+              float barL_ = kBarLo, barR_ = kBarLo;
+              double needleF_ = 0.0;
+              int holdTicks_ = 0, readoutTicks_ = 15;
+              float holdPeak_ = 0.0f, holdTp_ = 0.0f;
+              int quiet_ = 0;
+              bool wasPlaying_ = false;
+          };
+
+          MPC_PLUGIN_ENTRY(LoudnessMeter)
+          LMEOF
+          mkdir -p "$(dirname "src/LoudnessDsp.h")"
+          cat > "src/LoudnessDsp.h" <<'LMEOF'
+          // LoudnessDsp.h - the measuring core of the gltchsqnz Loudness Meter.
+          //
+          // Everything here follows ITU-R BS.1770-4 / EBU R128 (Tech 3341, 3342):
+          //
+          //   K-weighting      a high shelf (+4 dB above ~1.7 kHz, the "head" filter) followed by a high-pass
+          //                    (~38 Hz, the "RLB" filter). Coefficients are derived for any sample rate with the
+          //                    bilinear-transform formulas used by libebur128, so 44.1, 48, 88.2 and 96 kHz all read
+          //                    the same.
+          //   Loudness         L = -0.691 + 10 log10( sum over channels of mean(square(K-weighted signal)) )
+          //                    (left and right have weight 1.0)
+          //   Momentary  (M)   400 ms sliding window, updated every 100 ms
+          //   Short-term (S)   3 s sliding window, updated every 100 ms
+          //   Integrated (I)   all 400 ms blocks (75 % overlap) since the last reset, gated twice:
+          //                    absolute gate -70 LUFS, then relative gate 10 LU below the loudness of the blocks that
+          //                    passed the absolute gate. Stored as a 0.01 LU histogram of block energies, so memory is
+          //                    fixed however long the measurement runs.
+          //   LRA              EBU Tech 3342: short-term values (every 100 ms), absolute gate -70, relative gate -20 LU,
+          //                    LRA = 95th percentile - 10th percentile.
+          //   True peak        4x oversampling with the 48-tap polyphase FIR of BS.1770-4 Annex 2, absolute maximum.
+          //   Sample peak      plain absolute maximum of the input samples.
+          //   RMS              300 ms window (3 x 100 ms blocks), unweighted, of the louder channel.
+          //                    Plain RMS: a full-scale sine reads -3.0 dB.
+          //   VU               the squared signal through two cascaded one-pole low-passes (critically damped,
+          //                    reaches 99 % of a step in about 300 ms, like a VU needle), read with the AES17
+          //                    convention (+3.01 dB) so a sine peaking at the VU reference reads 0 VU.
+          //
+          // Real-time safe: no allocation after prepare(), no locks.
+
+          #pragma once
+
+          #include <algorithm>
+          #include <cmath>
+          #include <cstring>
+          #include <vector>
+
+          namespace loud {
+
+          constexpr double kPi = 3.14159265358979323846;
+          constexpr double kAbsGate = -70.0;          // LUFS
+          constexpr double kHistLo = -70.0;           // histogram range for gating, LUFS
+          constexpr double kHistHi = 10.0;
+          constexpr double kHistStep = 0.01;          // LU per bin
+          constexpr int    kHistBins = (int)((kHistHi - kHistLo) / kHistStep + 0.5);   // 8000
+          constexpr int    kShortBlocks = 30;         // 30 x 100 ms = 3 s
+          constexpr int    kMomBlocks = 4;            // 4 x 100 ms = 400 ms
+          constexpr int    kRmsBlocks = 3;            // 300 ms
+          constexpr double kSilent = -200.0;          // "no value" loudness
+
+          inline double energyToLufs(double e) { return e > 1e-20 ? -0.691 + 10.0 * std::log10(e) : kSilent; }
+          inline double lufsToEnergy(double l) { return std::pow(10.0, (l + 0.691) / 10.0); }
+          inline double gainToDb(double g) { return g > 1e-10 ? 20.0 * std::log10(g) : kSilent; }
+
+          // ------------------------------------------------------------------------------------------
+          // K-weighting (two biquads, transposed direct form II, double precision)
+          // ------------------------------------------------------------------------------------------
+          struct Biquad
+          {
+              double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+              double z1 = 0, z2 = 0;
+              void reset() { z1 = z2 = 0.0; }
+              double process(double x)
+              {
+                  double y = b0 * x + z1;
+                  z1 = b1 * x - a1 * y + z2;
+                  z2 = b2 * x - a2 * y;
+                  return y;
+              }
+          };
+
+          struct KWeighting
+          {
+              Biquad shelf, highpass;
+
+              void prepare(double fs)
+              {
+                  // Stage 1: high shelf (libebur128 / BS.1770 derivation)
+                  {
+                      const double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196;
+                      const double K = std::tan(kPi * f0 / fs);
+                      const double Vh = std::pow(10.0, G / 20.0);
+                      const double Vb = std::pow(Vh, 0.4996667741545416);
+                      const double a0 = 1.0 + K / Q + K * K;
+                      shelf.b0 = (Vh + Vb * K / Q + K * K) / a0;
+                      shelf.b1 = 2.0 * (K * K - Vh) / a0;
+                      shelf.b2 = (Vh - Vb * K / Q + K * K) / a0;
+                      shelf.a1 = 2.0 * (K * K - 1.0) / a0;
+                      shelf.a2 = (1.0 - K / Q + K * K) / a0;
+                  }
+                  // Stage 2: high-pass (RLB)
+                  {
+                      const double f0 = 38.13547087602444, Q = 0.5003270373238773;
+                      const double K = std::tan(kPi * f0 / fs);
+                      const double a0 = 1.0 + K / Q + K * K;
+                      highpass.b0 = 1.0; highpass.b1 = -2.0; highpass.b2 = 1.0;
+                      highpass.a1 = 2.0 * (K * K - 1.0) / a0;
+                      highpass.a2 = (1.0 - K / Q + K * K) / a0;
+                  }
+                  reset();
+              }
+              void reset() { shelf.reset(); highpass.reset(); }
+              double process(double x) { return highpass.process(shelf.process(x)); }
+          };
+
+          // ------------------------------------------------------------------------------------------
+          // True peak: 4x polyphase interpolator, BS.1770-4 Annex 2 (12 taps per phase)
+          // ------------------------------------------------------------------------------------------
+          struct TruePeak
+          {
+              static constexpr int kTaps = 12;
+              float hist[kTaps * 2] = {};     // doubled ring so a contiguous window is always available
+              int   pos = 0;
+
+              void reset() { std::memset(hist, 0, sizeof(hist)); pos = 0; }
+
+              // Push one sample, return the largest absolute value of the 4 interpolated points.
+              float process(float x)
+              {
+                  static const float kCoef[4][kTaps] = {
+                      { 0.0017089843750f,  0.0109863281250f, -0.0196533203125f,  0.0332031250000f, -0.0594482421875f,  0.1373291015625f,
+                        0.9721679687500f, -0.1022949218750f,  0.0476074218750f, -0.0266113281250f,  0.0148925781250f, -0.0083007812500f },
+                      {-0.0291748046875f,  0.0292968750000f, -0.0517578125000f,  0.0891113281250f, -0.1665039062500f,  0.4650878906250f,
+                        0.7797851562500f, -0.2003173828125f,  0.1015625000000f, -0.0582275390625f,  0.0330810546875f, -0.0189208984375f },
+                      {-0.0189208984375f,  0.0330810546875f, -0.0582275390625f,  0.1015625000000f, -0.2003173828125f,  0.7797851562500f,
+                        0.4650878906250f, -0.1665039062500f,  0.0891113281250f, -0.0517578125000f,  0.0292968750000f, -0.0291748046875f },
+                      {-0.0083007812500f,  0.0148925781250f, -0.0266113281250f,  0.0476074218750f, -0.1022949218750f,  0.9721679687500f,
+                        0.1373291015625f, -0.0594482421875f,  0.0332031250000f, -0.0196533203125f,  0.0109863281250f,  0.0017089843750f },
+                  };
+                  // newest sample at hist[pos + kTaps - 1] after the write below; window = hist[pos .. pos+kTaps-1], oldest first
+                  hist[pos] = x;
+                  hist[pos + kTaps] = x;
+                  pos = (pos + 1) % kTaps;
+                  const float* w = hist + pos;           // oldest .. newest
+                  float m = 0.0f;
+                  for (int ph = 0; ph < 4; ++ph)
+                  {
+                      float acc = 0.0f;
+                      // coefficient k multiplies the sample k steps back from the newest
+                      for (int k = 0; k < kTaps; ++k) acc += kCoef[ph][k] * w[kTaps - 1 - k];
+                      m = std::max(m, std::fabs(acc));
+                  }
+                  return m;
+              }
+          };
+
+          // ------------------------------------------------------------------------------------------
+          // Gating histogram (energies, 0.01 LU bins from -70 to +10 LUFS)
+          // ------------------------------------------------------------------------------------------
+          struct GateHistogram
+          {
+              std::vector<unsigned> count;
+              std::vector<double>   energy;
+              unsigned long long    total = 0;
+
+              void prepare() { count.assign(kHistBins, 0u); energy.assign(kHistBins, 0.0); total = 0; }
+              void clear() { std::fill(count.begin(), count.end(), 0u); std::fill(energy.begin(), energy.end(), 0.0); total = 0; }
+
+              static int binOf(double lufs)
+              {
+                  int b = (int)std::floor((lufs - kHistLo) / kHistStep);
+                  return std::min(std::max(b, 0), kHistBins - 1);
+              }
+              static double binLufs(int b) { return kHistLo + (b + 0.5) * kHistStep; }
+
+              void add(double e)
+              {
+                  double l = energyToLufs(e);
+                  if (l <= kAbsGate || count.empty()) return;      // absolute gate
+                  int b = binOf(l);
+                  count[(size_t)b]++; energy[(size_t)b] += e; total++;
+              }
+
+              // Mean energy of the blocks whose loudness is above `gate` (bins entirely above it). Returns 0 when none.
+              double meanAbove(double gate, unsigned long long* n = nullptr) const
+              {
+                  int first = (gate <= kHistLo) ? 0 : binOf(gate) + 1;
+                  double e = 0.0; unsigned long long c = 0;
+                  for (int b = first; b < kHistBins; ++b) { c += count[(size_t)b]; e += energy[(size_t)b]; }
+                  if (n) *n = c;
+                  return c ? e / (double)c : 0.0;
+              }
+
+              // Integrated loudness, gated at -70 and then 10 LU below the absolute-gated loudness.
+              double integrated() const
+              {
+                  if (total == 0) return kSilent;
+                  double absMean = meanAbove(kHistLo);
+                  double rel = energyToLufs(absMean) - 10.0;
+                  double e = meanAbove(rel);
+                  return e > 0.0 ? energyToLufs(e) : kSilent;
+              }
+
+              // Loudness range (Tech 3342): relative gate -20 LU, 10th..95th percentile. Returns < 0 when undefined.
+              double range() const
+              {
+                  if (total < 2) return -1.0;
+                  double absMean = meanAbove(kHistLo);
+                  double rel = energyToLufs(absMean) - 20.0;
+                  unsigned long long n = 0;
+                  meanAbove(rel, &n);
+                  if (n < 2) return -1.0;
+                  int first = binOf(rel) + 1;
+                  auto percentile = [&](double p) {
+                      unsigned long long target = (unsigned long long)std::floor((double)(n - 1) * p + 0.5);
+                      unsigned long long acc = 0;
+                      for (int b = first; b < kHistBins; ++b)
+                      {
+                          acc += count[(size_t)b];
+                          if (acc > target) return binLufs(b);
+                      }
+                      return binLufs(kHistBins - 1);
+                  };
+                  return std::max(0.0, percentile(0.95) - percentile(0.10));
+              }
+          };
+
+          // ------------------------------------------------------------------------------------------
+          // The meter: feed stereo frames, read results after each 100 ms block
+          // ------------------------------------------------------------------------------------------
+          class Meter
+          {
+          public:
+              void prepare(double fs)
+              {
+                  fs_ = fs;
+                  blockLen_ = std::max(1, (int)std::lround(fs * 0.1));
+                  for (int c = 0; c < 2; ++c) kw_[c].prepare(fs);
+                  integ_.prepare();
+                  lra_.prepare();
+                  // VU: two one-poles with tau = 300 ms / 6.64 (99 % of a step in ~300 ms)
+                  vuCoef_ = 1.0 - std::exp(-1.0 / (fs * 0.300 / 6.64));
+                  clear();
+              }
+
+              // Clear filter memories only (used on resume): measurements continue.
+              void resetFilters()
+              {
+                  for (int c = 0; c < 2; ++c) { kw_[c].reset(); tp_[c].reset(); }
+              }
+
+              // Start a fresh measurement.
+              void clear()
+              {
+                  resetFilters();
+                  integ_.clear(); lra_.clear();
+                  std::fill(std::begin(blockE_), std::end(blockE_), 0.0);
+                  std::memset(rawE_, 0, sizeof(rawE_));
+                  blocks_ = 0; ring_ = 0; inBlock_ = 0;
+                  acc_ = 0.0; raw_[0] = raw_[1] = 0.0;
+                  momentary = shortTerm = integrated = kSilent;
+                  momMax = shortMax = kSilent;
+                  lra = -1.0;
+                  tpMax = peakMax = 0.0f;
+                  rms = kSilent;
+                  for (int c = 0; c < 2; ++c) { vu1_[c] = vu2_[c] = 0.0; winPeak[c] = winTp[c] = 0.0f; }
+              }
+
+              // Process one stereo frame. Returns true when a 100 ms block has just completed (results updated).
+              bool frame(float l, float r)
+              {
+                  const float in[2] = { l, r };
+                  double sum = 0.0;
+                  for (int c = 0; c < 2; ++c)
+                  {
+                      const double x = in[c];
+                      const double k = kw_[c].process(x);
+                      sum += k * k;
+                      raw_[c] += x * x;
+                      const float a = std::fabs(in[c]);
+                      if (a > winPeak[c]) winPeak[c] = a;
+                      const float t = std::max(tp_[c].process(in[c]), a);   // a true peak is never below the sample peak
+                      if (t > winTp[c]) winTp[c] = t;
+                      // VU ballistics on the squared signal
+                      vu1_[c] += vuCoef_ * (x * x - vu1_[c]);
+                      vu2_[c] += vuCoef_ * (vu1_[c] - vu2_[c]);
+                  }
+                  acc_ += sum;
+                  if (++inBlock_ < blockLen_) return false;
+                  endBlock();
+                  return true;
+              }
+
+              // VU level of the louder channel in dBFS, AES17 convention (a sine reads its peak level).
+              double vuDbfs() const { return gainToDb(std::sqrt(std::max(vu2_[0], vu2_[1]))) + 3.0103; }
+
+              // Results (LUFS / LU / linear peaks), valid after each completed block.
+              double momentary = kSilent, shortTerm = kSilent, integrated = kSilent;
+              double momMax = kSilent, shortMax = kSilent;
+              double lra = -1.0;
+              float  tpMax = 0.0f, peakMax = 0.0f;
+              double rms = kSilent;                    // dBFS
+              // Per-channel maxima since the caller last cleared them (the caller resets these after reading).
+              float  winPeak[2] = { 0.0f, 0.0f }, winTp[2] = { 0.0f, 0.0f };
+
+              void clearWindow() { winPeak[0] = winPeak[1] = winTp[0] = winTp[1] = 0.0f; }
+              void notePeaks()   // fold the window peaks into the maxima since reset
+              {
+                  peakMax = std::max(peakMax, std::max(winPeak[0], winPeak[1]));
+                  tpMax = std::max(tpMax, std::max(winTp[0], winTp[1]));
+              }
+
+          private:
+              void endBlock()
+              {
+                  blockE_[ring_] = acc_ / (double)blockLen_;
+                  rawE_[ring_][0] = raw_[0] / (double)blockLen_;
+                  rawE_[ring_][1] = raw_[1] / (double)blockLen_;
+                  ring_ = (ring_ + 1) % kShortBlocks;
+                  acc_ = 0.0; raw_[0] = raw_[1] = 0.0; inBlock_ = 0;
+                  blocks_++;
+
+                  auto meanOf = [&](int n) {
+                      n = std::min(n, blocks_);
+                      double e = 0.0;
+                      for (int i = 1; i <= n; ++i) e += blockE_[(ring_ - i + kShortBlocks) % kShortBlocks];
+                      return n ? e / n : 0.0;
+                  };
+                  const double eM = meanOf(kMomBlocks);
+                  const double eS = meanOf(kShortBlocks);
+                  momentary = energyToLufs(eM);
+                  shortTerm = energyToLufs(eS);
+                  if (blocks_ >= kMomBlocks)
+                  {
+                      integ_.add(eM);                     // one 400 ms gating block every 100 ms (75 % overlap)
+                      momMax = std::max(momMax, momentary);
+                  }
+                  if (blocks_ >= kShortBlocks)
+                  {
+                      lra_.add(eS);
+                      shortMax = std::max(shortMax, shortTerm);
+                  }
+                  integrated = integ_.integrated();
+                  lra = lra_.range();
+
+                  double r[2] = { 0.0, 0.0 };
+                  int n = std::min(kRmsBlocks, blocks_);
+                  for (int i = 1; i <= n; ++i)
+                      for (int c = 0; c < 2; ++c) r[c] += rawE_[(ring_ - i + kShortBlocks) % kShortBlocks][c];
+                  rms = n ? gainToDb(std::sqrt(std::max(r[0], r[1]) / n)) : kSilent;
+              }
+
+              double fs_ = 48000.0;
+              int blockLen_ = 4800;
+              KWeighting kw_[2];
+              TruePeak tp_[2];
+              GateHistogram integ_, lra_;
+              double blockE_[kShortBlocks] = {};
+              double rawE_[kShortBlocks][2] = {};
+              int blocks_ = 0, ring_ = 0, inBlock_ = 0;
+              double acc_ = 0.0, raw_[2] = { 0.0, 0.0 };
+              double vuCoef_ = 0.001, vu1_[2] = { 0.0, 0.0 }, vu2_[2] = { 0.0, 0.0 };
+          };
+
+          } // namespace loud
+          LMEOF
+          mkdir -p "$(dirname "make_silver.py")"
+          cat > "make_silver.py" <<'LMEOF'
+          #!/usr/bin/env python3
+          """Loudness Meter - brushed silver skin.
+
+          Same design language as Sweep Filter and Comb Filter: a brushed-aluminium version of the SDK's UI kit
+          (knobs, blue segment buttons), the gltchsqnz logo (about 1.5 cm) bottom right with the bold title to its
+          left, and the button names painted in black under the buttons. On top of the SDK's gen_ui.py output it
+          adds the meter page:
+
+            * two LED bar meters (L / R, or M / S in LUFS mode) with a dB scale and their values,
+            * a VU-style needle meter (VU in dB / True Peak modes, LU relative to the target in LUFS mode),
+            * a large precise readout with its caption and an OVER lamp for the true-peak limit,
+            * a short-term loudness history graph,
+            * a grid of readings: Integrated, Vs Target, Short-term, Momentary, maxima, LRA, PLR, peaks, RMS.
+
+          The meters are film-strip images and labels bound to the plugin's read-only "reading" parameters, which
+          the plugin writes about 30 (bars, needle) and 10 (numbers) times a second. All text drawn by the MPC uses
+          its own Titillium Web; painted text (title, button names, scales) is pre-rendered Poppins Bold.
+
+          The result goes to ./skins/, which build.py copies verbatim into "Plugin Skins/".
+
+          Needs build/params.json first:   python tools/build.py "plugins/Loudness Meter" --target native
+          Run from anywhere:               python "plugins/Loudness Meter/make_silver.py"
+
+          Standard library only. Nothing here changes the SDK; the silver theme is registered inside this process.
+          """
+
+          import base64
+          import math
+          import os
+          import shutil
+          import struct
+          import sys
+          import zlib
+
+          HERE = os.path.dirname(os.path.abspath(__file__))
+          SDK = os.path.dirname(os.path.dirname(HERE))          # plugins/<Name>/ -> SDK root
+          sys.path.insert(0, os.path.join(SDK, "tools"))
+
+          import make_ui_kit as K   # noqa: E402
+          import gen_ui             # noqa: E402
+
+          ACCENT = "ff1d5fd6"       # the lit colour (knob arcs). Change it here.
+          SHOW_HISTORY = True       # the history graph uses the MPC's Plotter widget; set False to leave it out
+
+          # Button colours (brushed blue).
+          BTN_OFF = ((70, 120, 215, 255), (36, 78, 170, 255))     # top -> bottom, resting
+          BTN_ON = ((90, 158, 255, 255), (40, 112, 238, 255))     # top -> bottom, selected
+          BTN_EDGE_ON = (205, 228, 255, 255)
+          BTN_EDGE_OFF = (16, 40, 92, 255)
+
+          # Logo and text on the page.
+          LOGO_PLATE = 128          # logo size in screen pixels: about 1.5 cm on the 7" MPC screens (~85 px/cm)
+          LOGO_MARGIN = 26          # gap from the bottom-right corner of the screen
+          TITLE_GAP = 24            # gap between the title and the logo
+          TEXT_BLACK = (14, 15, 17)
+          BLOCK_SHIFT = -20         # SETUP page: nudge the control block up a little to leave room for the logo band
+
+          # Names painted under the segment buttons (choice -> text).
+          CAPTIONS = {"dB": "dB", "True Peak": "TRUE PEAK", "LUFS": "LUFS",
+                      "Momentary": "MOM", "Short-term": "SHORT", "Integrated": "INT", "Off": "OFF", "On": "ON"}
+
+          LOGO = (                  # the gltchsqnz invader, 8 x 7 cells
+              ".#....#.",
+              "..#..#..",
+              ".######.",
+              "##.##.##",
+              "########",
+              ".#....#.",
+              "..#..#..",
+          )
+
+          SILVER_GREYS = {
+              "bg":         "ffc4c7cd",   # page colour
+              "body":       "ffb4b8bf",   # knob / button body
+              "bodyLight":  "fff0f1f4",   # lit edge
+              "bodyDark":   "ff6f737b",   # shaded edge, grooves
+              "track":      "ff7c8089",   # unfilled arc / fader groove
+              "outline":    "ff25272b",
+              "pointer":    "ff1e2023",   # dark pointer on the light knob face
+              "thumb":      "ffd0d3d8",
+              "thumbLight": "fff4f5f7",
+              "thumbDark":  "ff9a9ea6",
+              "ledOff":     "ff9a9ea6",
+              "textOn":     "ff111214",
+          }
+
+          # ---- meter page geometry (tab coordinates, 1280 x 628) -------------------------------------
+          TOP_Y = 8                                  # the row of controls along the top
+          BARS = (24, 132, 240, 484)                 # x, y, w, h of each panel
+          VU = (284, 132, 480, 262)
+          READ = (284, 404, 480, 126)
+          HIST = (284, 540, 480, 76)
+          STATS = (784, 132, 472, 326)
+
+          BAR_W, SEG_PITCH, SEG_LIT = 48, 6, 4       # LED bars: 63 one-dB segments, -60 .. +3 dB
+          BAR_LO, BAR_HI = -60, 3
+          BAR_SEGS = BAR_HI - BAR_LO
+          BAR_H = BAR_SEGS * SEG_PITCH
+          BAR_TOP = BARS[1] + 38
+          BAR_XL, BAR_XR = BARS[0] + 28, BARS[0] + BARS[2] - 28 - BAR_W
+          BAR_FRAMES = BAR_SEGS + 1
+
+          NEEDLE_FRAMES = 81                         # needle film strip (drawn at half size, scaled 2x by the MPC)
+          NEEDLE_SWEEP = 50.0                        # degrees either side of vertical
+          PIVOT = (240.0, 300.0)                     # needle pivot in VU-panel coordinates (below the visible face)
+          ARC_R = 212.0                              # scale arc radius
+          HOOD_H = 40                                # dark band hiding the needle's root
+          NEEDLE_BOX = (44, 56, 392, 160)            # VU-panel area the needle sweeps (its bottom edge is under the hood)
+          NEEDLE_SCALE = 0.75                        # needle frames are drawn at 3/4 size to keep the strip small
+          HIST_RANGE = (-40.0, 0.0)                  # LUFS shown by the history graph, bottom .. top
+
+          LCD = (21, 24, 30)                         # dark panel colour
+          LCD_TEXT = "fff0f5ff"
+          LCD_MUTED = "ff8fb4f0"
+          INK = "ff16181b"
+          INK_MUTED = "ff3d4148"
+          LOUD_RANGE = (-70.0, 5.0)              # plain range of the LUFS reading parameters (kLoudLo, kLoudHi in the code)
+
+          # Pre-rendered text (Poppins Bold, SIL OFL), 8-bit alpha, zlib + base64.
+          # key: (width, height, baseline row, data).
+          TEXT_MASKS = {
+              'title': (248, 24, 24,
+                  "eNrlmH9sFEUUx+eglmuhtSUNUtJGSZSmJtaQGCPxB0KihyHGNP6goaUtCUEkGCURxKKRGItKkQQ0GEKCf6D+1R+gxw8hba+tRlGq"
+                  "2BgMVtqr7dGT/jClxbvela4zb3Z3fr3bxBgTTCe52zffmX3zPrsz+2aXkH9fyixWyIwr/09uCLrs5uQGx9ZrQii44R3uP4C5+bm7"
+                  "fa7wujWDuK0VTt13eUZxf+rUV1r/Jfecyqa+eDzcuC7d6CEj+p47OTQZPrpMEu2eq49FJgebnhAe87a1Xk1e/+XIY66SVlF/eSLW"
+                  "1/js7FSCxB3LteufaNyaX0sUdFj73ML93TsR7kf6nJPDD3pwZ5/hnab3atwVn9mnH3EQqiYcj2fzuXJ3l6N8U4ALCsgWXs35S+XW"
+                  "/WrcxrD83OWjlrXL5N4yJc6e2pySO+NHt9d5lbvHbajjHvdL8QzdxZT8iFAuZWGCyn2BVzdbCrfhV+U2hwVz5zUL414pYVPw5am4"
+                  "6yytaBeclRtFTKxQtJ8ytJCs9zFBm7j3QbVT4Tb9KtEgw4IVtzDujCtQv97WHgNjwI9zF/DLE+toj5vckVBE3PD518D8vfl8gl9v"
+                  "qvUyoym38Et2/PMWRJC4Wcr+iNXuZavKDQbxGwyC9UMwGESHFZfB4N4A1c/nE7LgLJjrce6tYDTfRsjCkM5d4yO+N8A6R7WX4fqU"
+                  "0Ry8qBkeGlSDa0rX0OI4KyWIIHG30N9YJq0doEbIDQbzK4WKNXtwfwF92KQgWXDTjuPc4OtKNjxtoip3CHq2M3OYGnALd4N2B7Tf"
+                  "SUg3O0ars90JbQgS9yY2o6pomhmhxw1uMJhfKVSsmTOHHs0z81i/6E7eg4mCc//Gjnt4v70q96sg7oDHAzUi+oNgFSG7uZXs2LaY"
+                  "uzAEOfE00L8OQtawxZnjBoP5lULFmvlKT8Py9ySrVXO7Gh4DOPeE1G+9yr0WxHJHTOgBPE1z4HdOZfpUMSRFXZBjK2X/RYTlzQYR"
+                  "DOZXChVrdhd6Cu4qiSeG04zbax/h1q6QEUCAivPeHXOqY/cTTJBiSx9lc+t29nwr9eAOeHMH7NZ1KPeANM/3MLuPkKQ2exnNr+y4"
+                  "D53nGjckiE3GNtH/1MEwD6hrFi4If4fo/x+19G80XQyB+hUBYM0Kqsp9gtV6/TD34NRjtotWaG5zaGCzdhX2j7dGPblPs+Np0ALV"
+                  "tDxDyKw0VghZehw6lZiCGttD7MBu4CFpCMSvHADW7MH9AlQbc+gWqsWy1/A5MLbT7FTjpqwXwWhbiOQxjfslMN6kVKWQ84/aOYbR"
+                  "5YLxpCmosfmcLeDD0hCIX/ux8xZJ0Wxys1TPsj2ZNwz18ZYOvh/pn0PILj7oQGtEbFEWJfnmx9nfpObO5RuIweaLvB/d8y8F49vi"
+                  "zFfAeMAUtHvytv2+4JOGQPwScgkejV9TEqzZ5Baxr56WhSS9wmRJEtmSvpNyn6rvaMuVbh8z6aSsRP2IoHIX8YZaZQjELzksokGa"
+                  "vbjJDgl86nnoUusKF91u/k6x9/XmJvukEUKZ8LmoR5IqMUFbg9+DVawOYfol9yQFidnsyU1WRZ1qzzLeZfaHtnB4reiWdcYUU7yp"
+                  "V447LyoH53Kl8IQzxvhGXFC5YbV26rGbfkllXJAYzd7cZO7G4EBisre+PN0NYEV9OB5peFz97rDm1EiivyFgfncwPsLkbW8dSo5c"
+                  "qCuR3vI/6BpODH5Vk59SkP0tYPdxqxE74nfJgZ8n3O8OWrN07t+9Zo5h"),
+              'cap:dB': (22, 12, 12,
+                  "eNpjYICA//8fMGACkOh/EPh+o44dUxQI5gL58svffN1tBBF9HRPb/Pf/ewYGqZcg6Y8QUaDZql/+n2dgmPX//73CqjdIJlzRY2B4"
+                  "/P+fIgODC0L07zxuBoaf/18BDeeGmzvl//95YLUqcLUgN78B2QY09z7c3NcxMb3//z8EuuEFyLBPyO6tg7j320FzuOi3K/lMDACe"
+                  "kJkp"),
+              'cap:TRUE PEAK': (88, 11, 11,
+                  "eNqFkk8oBHEUx9+2aZVEFHuinERWFHLRRikH4eA2iSiFuCgHly2cnKxSjuSivfhzsCU5IYeNPWwUsYuiXatk21rGfL2Z2d/O7Oy2"
+                  "3uH3e7/v981nfvPmEUSQtn74u4k4DVN6Ey7pAqDE9tooSz4BXuyUeWwX2MoUCC4/N1iYy5HqNMu1Cid9Ge4CcOYgkiQJiPFK6jay"
+                  "AQQtXNWUBDcmjfmAQ7PsUV/gE/W9v4hUieqwsb0jaeGGKRPaoRS4Mcm2Rzz4karU7bo4vlxk4fJ914HrPH3wGPcd5fsemOQeYIk/"
+                  "eVaz34JQBsjK1ULuL8TV+9thkneA+pIEroR9Tnm5gS5OZTzzagfu0410Zc1DKxlyWRIhp3MfaFHF1wCwmMMNN8m4K+Y0Apl73w6c"
+                  "5ulvdjYp5smriTVRKEM5XPICK5yucZdn5p+Aaes8GNy0fCm4cYdmu3+QaM7hlkfx3UhUcavX+ous82twdbkBOFbPm8Cwbs8Bkeqc"
+                  "OZvgqbbxLC2Hkp8XU3b6j7sKjKtnN3CUtrf53zn+AJvQ8zE="),
+              'cap:LUFS': (39, 11, 11,
+                  "eNpj+P//AQMIQGkw9R8CGhgYPLY++X57ngpcGruyIgjjqxkOZa9jgECP4eX/f33Zt/7/34pDGUSM4cP/T5wMei0t+XgsBTqt////"
+                  "e/X6SNLYlTHm3QYybiYjlP35/xhIMv//fwfmNj2wuHbZw///y+DKHv7/I8bAYPb//34kt1U3VDAwiP//fwko9FhCQoKHYeL//xdy"
+                  "Sh79/5+NpOzC///zkxb//78X7g6hGxDWDlYkZW4/wWK/HBHO5W25+u3j8SxmJG8xMBisePbr9QYzBgAfmdja"),
+              'cap:MOM': (43, 11, 11,
+                  "eNplkL9LwlEQwC+hII1ocK6tIaPFUfon6j9oa2oQXXNtEQPb2hXnaqspgsqhaIggf2yKEda3hgjp0917QXDe8N593ud4994JUBeL"
+                  "Q81sz+7fJePb8oKmzumS2PH8OJYWBoTorE85O95V3CHg8iuc7ZWuoL/kna0PijcR63CglGpB2Tt4n7ApeSaJYY8fayk5uPBOO53Q"
+                  "kGNO+4ZfjMJH0vDoneIW36ufbAfs/t967p3i7IgnXuYCHsW3zjSh6J2iVPXVNQm4EiZQvITuoneG2o2NiFIYxrk+r005Q7mmLX+l"
+                  "kq3cf7y1Sxnx7hd2yhRT"),
+              'cap:SHORT': (56, 11, 11,
+                  "eNpjYPDY+uT77XkqDAz//z9gAIIH//+DKJH6C5/eny7jYQBJAMG7HU4wJggwFEHor2ao+qyfQ8Tv6sAV/wtA1vfy/7++7Fv//29F"
+                  "0Sf39v//bfmlx4BiAkCJ1zFx0/7/v8jAEBMTA+LFxDB8+P+Jk0GvpSUfRd+U//87gWymVf//l0El3vz/BpKGKev///9evT4DstuB"
+                  "+u7//wfyGYP2///7IPZN/v//ArI+xrzbQJU3k1H1/fj/CqyI6///6zCJP77I+kCGlj2EOAfk8JjXIH33EPbtheo7a8eArK+6oYKB"
+                  "Qfz//0so/psK8R/jiv//i0ESun/+3+ZA0Xfh///5SYshxiL0yYPDs/gI0PN8YIlJ//+3ouhz+wl2xS9HtPh7AXHdHS2ISoFX/39p"
+                  "o/jPYMWzX683mGGkl4aLnz+cKeWGqUz5//8oI0IfAN1eRiY="),
+              'cap:INT': (27, 11, 11,
+                  "eNp1zrsJgEAQhOEByxAsQvswMb0exMYMrEN7OAMDNRND4fd1IoK7wTDMl6zAS7ClkjycPZwC0UYmUQZyzsF85EtLfJN0b3poGqgN"
+                  "8gXkBqmhHw1K1uutP1JlU9SZpGz70A4xSp5V"),
+              'cap:OFF': (31, 11, 11,
+                  "eNpjYGAQqb/w6f3pMh4GBob/ENCAYDBYP4cw7+pgk5Z7+///tvzSY///PxAAir6OAQI9BGPK//+dQGOZVv3/XwYUfcAABnDG/f//"
+                  "QLYyaP//v48BbiOc8eP/K7Ayrv//r2ORvofQvRdqpR4DgjEVYjfjiv//i7HYLQ92efGR///v8WGRZrB+AbHojhYDNmkGkYaLnz+c"
+                  "KeVmwCINAP8crb4="),
+              'cap:ON': (25, 11, 11,
+                  "eNpFzz0PwVAUBuAXGyKGbpLaMTH6DxY/pBFpV1Y7/0EMBoONSSwqYbJQNQiaCCmDofG6H03c4dzkPDlfAIzOJnysnCwAMqqKzydF"
+                  "rF+o3qEigW4qBvNOTi17Sfp5CbRi6JM9UZcckY6CsKDhyK/sjjI5FxCcOdbwYSDzSJM7AX6TbCjw/hUzCZjwdJMw0DMSQ7KtwHzL"
+                  "SUBRbdVekF5OAVoaUL/qO/YlaEitNcDobl9P184gBtQiEj/dW5i9"),
+              's13:+3': (16, 9, 9,
+                  "eNpjYIAC58Mfvhx0hPEYNH/8f/np/08pIPP/fxcGhvALRzjk/v83gvEZGMSvffnZBeKBAQODzP//nzIYGK5c+f///pUrQAWswf//"
+                  "ysLUJ384yCj+/78VjK/67f/t5/9fcMEttN/3/ssePQYADaw7rQ=="),
+              's13:0': (9, 9, 9,
+                  "eNoVyyEOQGAAhuF3AklwCE4hmi7YBIXLSFxAcQfuQjSGKvLP9qE/DxTjvdc2RNL2qIJBLZlOh1UpnhRwKcaSQhYluJJPr478N9+a"
+                  "zb8oJ3M0Ni+SuSks"),
+              's13:-3': (16, 9, 9,
+                  "eNpjYIAC58Mfvhx0hPEYNH/8f/np/08pGD/8whEOuf//jeAKGMSvffnZxcBwBQyAfJn//z9lMDD8BwOQAtbg/39lYaqTPxxkFP//"
+                  "3wrGV/32//bz/y+44MbZ73v/ZY8eAwAFjDBx"),
+              's13:-6': (16, 9, 9,
+                  "eNpjYICBgru/HlYxwrlx//8//vc/Dc4//L+Pwa8mCM7/8L/z9se1ogxXwICB4ff/f/f+/l/B8B8MGBie/c9lyPn/Dq5+7/8cFH74"
+                  "/793//6fCuczlN799aybAwAknDXW"),
+              's13:-9': (16, 9, 9,
+                  "eNpjYIACzt4nv+5XM8K4DDP//737938mnP8ByM76fxKJ38LR/P8TwxUwYGCY8R8EfjOAqf8MDBzNJzfW/n8HV582J4Wh7f9hOD/x"
+                  "//8n//6nwvkMebd/PqplAACKPTYD"),
+              's13:-12': (20, 9, 9,
+                  "eNpjYICAhv///7twTn71+agFAwxkXQGKzfj/+e3/1zxwQQag2Nv/hgr//5ujiEnLMGr//y/JcAUMIGIMDJxH/i8GMUEAKsa17f9J"
+                  "fgYUvQrn/2/iY2BAs+P/1StXLFDEIOa4AAB6k0Vj"),
+              's13:-18': (21, 9, 9,
+                  "eNpjYICAhv///7tobPn445w/AxxkXQEKXvv/493/P3IIUQag4Jv/SfL//xugCnq9/P72fyOQfQUMIILxv4EmbwSzQQAi+PR/rdX/"
+                  "/zqo2j//T1P6/98cVXDR/+9v/t9nRRXkmf7m6zZVBgYAIhxMKw=="),
+              's13:-24': (24, 9, 9,
+                  "eNpjYIACzsmvPh+1ALGm///vwgAHM/5/fvv/NQ8Dg+9/FPG3/w0V/v83Z5B4dRZFXFqGUfv/f0nG7X+MweJXwABsw5H/ixny//cz"
+                  "gMX/gwFQmGvb/5P8DN//37ny///9K3BzFM7/38QHUwZWCLP3/9UrV8AORbEXoswFJg4AU85VBw=="),
+              's13:-30': (24, 9, 9,
+                  "eNpjYIAC58Mfvhx0ZGBIvP7zWS8bTJRB88f/l5/+/5Ry+f//6Z//7XDx8AtHOOT+/zfa8n82Q8T/D+xwCQbxa19+djE8/h/KIPj/"
+                  "vxrDFTAAisv8//8pg+HHfzcGpv//bRj+gwFIA2vw/7+yj/4HMvD+/68KMyX5w0FG8f//rTb/X8AQg2S+6rf/t5//f8EFdM+DX0ju"
+                  "YbDf9/7LHj0GhqQbv573sTEAALBcWZw="),
+              's13:-40': (25, 9, 9,
+                  "eNpjYECA6f//uzAwJF7/+ayXDUmYwfc/SMLl//+nf/63I4lLvDoLktjyfzZDxP8P7HBxxu1/jEESj/+HMgj+/6/GcAUMGBjy//cz"
+                  "gCR+/HdjYPr/3wbIAQEGhu//71z5///+lUf/Axl4//9XhRv1Hwo2/1/AEINsB0QS7KoHv1BcBZVgSLrx63kfGwMAALla0Q=="),
+              's13:-50': (25, 9, 9,
+                  "eNpjYICC/2CQw8CQeP3ns142BgaExP0rV65EMrj8///0z/92ZAkXML3l/2yGiP8f2JEk1j37tFyI4fH/UAbB///VGK6AAdiOB3//"
+                  "L2f48d+Ngen/fxuopQwMDQ1eDOn/PzM8+h/IwPv/vyrMJI4FC4IZcv8/Ydj8fwFDDLIdB///f/j3fw/IVQ9+IbtKcOqTn/eagAqT"
+                  "bvx63sfGAAB9X1/V"),
+              's13:-60': (25, 9, 9,
+                  "eNpNjrELAWEAxR/DsRgM/gT+CqOMihKDFIPplMUi+yW5zWQxWkysJv+CovQJl7PpbHx89+Qr537j+9V7D/jREfLUiwCN7dMdGUGM"
+                  "Oun4bCFHXt60/mJNG4V+CUtOUKUXC4THwf4+T8FhGUkyg40GeNE/KM7wYB5RMgtqAJdtmLzhzCISZDqoWtHUYsEpauGNCpVQHH9f"
+                  "HWX4FbpCusM40NzJq23gAytEXwE="),
+              's13:-10': (21, 9, 9,
+                  "eNpjYICAhv///7swJF7/+ayXjQEGsq4ABV3+/3/65387AwIABbf8n80Q8f8DO4rg4/+hDIL//6sxXAEDiOCP/24MTP//2wDZIAAR"
+                  "fPQ/kIH3/39VFO2b/y9giEE3E2j7g1/otjMk3fj1vI+NAQB2DEst"),
+              's13:-20': (24, 9, 9,
+                  "eNpNjr0KQQEARj+GK/KTUQx3YTGZGIyyG5TBwsuYWCzKorwB8gQMJssVowhFt5SFmzp06XLGM5zvk74Eu+fbvCA11o9j25BHj5vN"
+                  "JVyCw5PWz9vkTMhP6KvGNeD5ZMqXhcSequKQkeXiLswY6k5ZfigKl7cOTVnEtKOiCKS9jrlkFJXGDFT/79uwsqzC+8/W+f/z6ZXU"
+                  "3DinjqEX0q1Xfw=="),
+              's17:20': (21, 13, 13,
+                  "eNpNjr0vg2EUxX9tBan4mLtJDNKFnd1i5D9gYeyiic1k0b3eqYORRCI+EpOIj7QmVmNH0VRZ+r6/Ps/L4Aw3956ce86BxbOPn84m"
+                  "AcWdzlf/easACz0j1gLZzDePoKWvbb2HFR3e3GZmy3S1MpvZg0TrcKgN6vt7TKZ+wpvOw5I+xgA29Ar6WoI57UZu+l3XIfU7HCXj"
+                  "F2MX2iIqh2GWc+X4acieIPesQFUfmLrWu5nocqw1OIhFnzQ7SZIEVjU9v8x7+odfaUSD/2Rx92UwaG8XGAF1zJKr"),
+              's17:10': (17, 13, 13,
+                  "eNpNzr0OwVAAxfHTdjOZbVYLO8/gKVgYTTaJycJi4j6FRSIxE8HmFcyStqa2f/fW9XHGX05OTtcYs5QUDi5JfOoFmgCJhRVl5h9o"
+                  "Q7bbFxQtqQQDY2kGCw83qEtNOHqIIZKqcPeQ87TLETy+jcxC5dewGzWpAQcPaxhJU3fkDR3IN9u/H67iYm94CIfXND33A70ALKN5"
+                  "Sw=="),
+              's17:7': (9, 13, 13,
+                  "eNpj+A8FDHDGHBD48f8pAwiY/v/fCmbM/f9PGUTzf/2/DyyQ+/9/NJhx5f97ThBt+///VLDA0v//jUC08I//58ECpf//54Boxtv/"
+                  "vwsyMDAAALuRMeA="),
+              's17:5': (11, 13, 13,
+                  "eNpj+A8FJgwMKMzfc0BAHsT8wgAFQKZK48REdjDzzxeg0jO8CG1NDAxfvnwp5sz7//8yVAPn///vGBh2HTmiy2D0//8dBoaD//8/"
+                  "Wfbi//8ZDAzmX8G6XsoA1Wksefrr5WIFBgYAi7dQjg=="),
+              's17:3': (10, 14, 14,
+                  "eNpjYGBwbJ7W4sLIwMC5/T8I7OFi6PoPAX0MD///n8Cd/P//fYaOnh5JBu7//58wgIBgw///C0CMA0Blp0WhrB/JYMnSdR///89k"
+                  "EJcQZ2DQ+///KsPn//8lGMT//3/FsOv//+u95///381g+hVsxU8rBgbNxU9/v9lgxAAAW0xJOw=="),
+              's17:2': (10, 13, 13,
+                  "eNpjYNBY/+772VAGBgaVj/9BwJ2BYdH//1fO/P9/lIHh2f//Uvz//n9kYKisqWDg+Pv/AwMYhPz/vwPM4L33/78PiMGy9f//RSAG"
+                  "2zqgTnYgg3vn//+H+UBCJ////7dszpw5DAz/oQCJBQAe2UJt"),
+              's17:1': (6, 13, 13,
+                  "eNrzmzNnzhSGhv///3+BkgwM5JMAk4ApDQ=="),
+              's17:0': (11, 13, 13,
+                  "eNodjKESAVEARc/uNknWVIXO51CIkiwptuMrFDNmZMag+QXZzFppd4/3nHTnzL0X0un9U1zHCbDxzxqGWh1Pjc2AnS5gpTlP7UJf"
+                  "LxSaQVtf1H7DNtN3sFWIrWhDtwM9PbPVOSzj8Ujr/eH/G3UkD4t09ijL2yThB3APUD8="),
+              's17:+': (11, 11, 11,
+                  "eNpjYGBg+P//CwMUYGH+hwEU5pw5c/7//w0kcWlDZWICAPuuKjw="),
+              's17:−': (9, 8, 8,
+                  "eNpj0YEAfpn/EBADZ7DZQIAoAxEAAMedEek="),
+              's30:VU': (43, 21, 21,
+                  "eNrr/w8ETxgZoIDtA4hfyMAAov5bQAQtwBwGYzBlBVPqDeL9lcSqlOEGiOqDKV0A4u1mwK60FkQ9hKpkfQ/iJeBQqgymzSCCniD2"
+                  "dz4cShmOg+huiOA8EHsVAy6lOSD6HsT+tyC2P06lor9BDGOQmAeI9Y4Np1KGbSBGO4g1B8SayYBbaTSIcRvIYHkDYtnhUcr9BcQy"
+                  "YGBwA9GPGPEoZVgKYrUwMMwG0R0M+JR6gVg3GJhfg2hdiPRfpPi2Asc2mMnyCqzGBURegsYbONmEQ9iR4ICBsKeA2I0zQWQ5VOkZ"
+                  "EGc6hD0LxD4BYVuC2NdBZv+TgyrtBQn9tgQxHf6A2K1Qibv/oeAgLInp/ANxf62qqFoPVvlLCSrRDFOaBlPK0P8fBVTAxDWgAj8F"
+                  "4UqZdyKrnAMXZzgLEdmAEGFgqfsFU/g2AUm8CCIWyoAMpAv23v324fq6GD4wFwDHKrNd"),
+              's30:LU': (35, 21, 21,
+                  "eNpjYPgPAhYMUIDMswBz0ARHlQy4kr8gnhWEbQVi/8VQ8gHEC4ewI0HsdxhKzoB40yHsWSD2CQwlvSDeb0sQ0+EPiN0KU9JfAAYM"
+                  "DDr/QNxfqyqq1oNV/FKCKYECILf/PwqoYMBUwrwTWWAOAxYlDCx1v2DctwkMWJUwMEgX7L377cP1dTF8YC4AoLZupA=="),
+              's17:OVER': (46, 12, 12,
+                  "eNptkUsrRGEcxp+mGMZMWUhmjy9AKaXMrCi5fAA2Vmzc9vIFyN4kscLKpQgbyzGjzMLwAUxZyDl0UOby877ncHL7r573eX/9r5Ji"
+                  "M1nHzc03SbswJRPRZyqtIoilQDwc9tiv9uvAvenUGJxZawSO9YuGcp8UL4JzeOAYPB51qLQYegsmLF3OmBj2xbrBzqV5KCSlZAHm"
+                  "lIFJqd7lNWFpT374IlHlRcpDv7VSkFMajqQh2FGYO6AjA1CSXGoNlm6s4SpS4r1ZGzCqsO9QsGrp6hftSMswXveIE/2HPo1LOUhZ"
+                  "Om07URfsDUImbDcQ5RNYs9JMeWWmbPOnlG5524b0L9qL3fNsqGCDB/v+Bs1z0dYsRaQfG/Q0C5vfr1Ps8F9WrnymDK/jqeGOWq91"
+                  "Y7MX7lN+oSkomzVA919a03AZ+QAGUCqT"),
+          }
+
+
+          # --------------------------------------------------------------------------------------------
+          # Brushed-metal noise (deterministic: same skin on every build)
+          # --------------------------------------------------------------------------------------------
+          def h01(n):
+              """Integer hash -> 0..1."""
+              n = (int(n) * 0x9E3779B1) & 0xFFFFFFFF
+              n ^= n >> 15
+              n = (n * 0x85EBCA77) & 0xFFFFFFFF
+              n ^= n >> 13
+              return (n & 0xFFFF) / 65535.0
+
+
+          def streak(x, y, seed):
+              """About -1.2 .. +1.2: long thin horizontal brush lines, broken into short runs."""
+              row = h01(int(y) * 977 + seed)
+              run = h01(int(y) * 131 + (int(x) // 41) * 7919 + seed + 5)
+              fine = h01(int(x) * 31 + int(y) * 1009 + seed + 11)
+              return (row - 0.5) * 1.2 + (run - 0.5) * 0.9 + (fine - 0.5) * 0.25
+
+
+          def clamp8(v):
+              return max(0, min(255, int(round(v))))
+
+
+          def shade(c, d):
+              return (clamp8(c[0] + d), clamp8(c[1] + d), clamp8(c[2] + d), c[3])
+
+
+          def brushed(y0, y1, c0, c1, seed, amp=7.0):
+              """Vertical gradient c0 -> c1 with horizontal brushing on top."""
+              base = K.vgrad(y0, y1, c0, c1)
+              return lambda px, py: shade(base(px, py), streak(px, py, seed) * amp)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Drawing overrides (same geometry as the SDK kit, silver surfaces) - identical to the other plugins
+          # --------------------------------------------------------------------------------------------
+          def turned(cx, cy, radius, seed=3):
+              """Turned-aluminium knob face: concentric brush lines and a two-lobed highlight."""
+              light = -0.75 * math.pi
+
+              def f(px, py):
+                  dx, dy = px - cx, py - cy
+                  rad = math.hypot(dx, dy)
+                  lobes = math.cos(2.0 * (math.atan2(dy, dx) - light))
+                  ring = h01(int(rad * 2.4) + seed * 101) - 0.5
+                  fine = h01(int(px * 13) + int(py * 29) * 7 + seed) - 0.5
+                  lum = 188 + 30 * lobes * (0.35 + 0.65 * min(1.0, rad / radius)) + ring * 16 + fine * 4
+                  return (clamp8(lum), clamp8(lum + 1), clamp8(lum + 4), 255)   # a touch cool
+              return f
+
+
+          def knob_static(size, th):
+              c = K.Canvas(size, size)
+              cx = cy = size / 2.0
+              r = size / 2.0
+              ring_out, ring_in = r - 1.0, r - max(4.0, size * 0.1)
+              body_r = ring_in - max(3.0, size * 0.07)
+              K.arc(c, cx, cy, ring_in, ring_out, -K.SWEEP / 2.0, K.SWEEP / 2.0, th["track"])
+              K.circle(c, cx, cy + 1.5, body_r + 1.0, K.with_alpha(th["outline"], 150))
+              K.circle(c, cx, cy, body_r, K.light_rim(cx, cy, th["bodyLight"], th["bodyDark"]))
+              face_r = body_r - max(1.5, size * 0.035)
+              K.circle(c, cx, cy, face_r, turned(cx, cy, face_r))
+              return c, (cx, cy, ring_in, ring_out, body_r, face_r)
+
+
+          def fader_cap(g, th):
+              w, h = g["cap_len"], g["cap_th"]
+              c = K.Canvas(w + 2, h + 4)
+              K.rrect(c, 1, 3, w, h, 5.0, K.with_alpha(th["outline"], 170))
+              K.rrect(c, 1, 1, w, h, 5.0, brushed(1, 1 + h, th["thumbLight"], th["thumbDark"], 23, 6.0))
+              K.rrect_outline(c, 1, 1, w, h, 5.0, 1.0, K.with_alpha(th["outline"], 180))
+              cx = 1 + w / 2.0
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 2.0, th["accentDark"])
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 1.4, th["accent"])
+              return c
+
+
+          def render_button(th, on, w=120, h=44, led=True):
+              """Blue brushed key: deep blue at rest, bright lit blue when selected."""
+              c = K.Canvas(w, h)
+              rad = 8.0
+              K.rrect(c, 1, 3, w - 2, h - 4, rad, K.with_alpha(th["outline"], 150))
+              top, bottom = BTN_ON if on else BTN_OFF
+              K.rrect(c, 1, 1, w - 2, h - 4, rad, brushed(1, h - 3, top, bottom, 17, 6.0))
+              K.rrect_outline(c, 1, 1, w - 2, h - 4, rad, 2.0 if on else 1.0, BTN_EDGE_ON if on else BTN_EDGE_OFF)
+              if on and not led:
+                  K.rrect(c, 10, h - 9, w - 20, 3, 1.5, BTN_EDGE_ON)
+              if led:
+                  lx, ly, lw, lh = 11, (h - 4) / 2.0 + 1 - 9, 6, 18
+                  if on:
+                      K.rrect(c, lx - 3, ly - 3, lw + 6, lh + 6, 6.0, th["accentGlow"])
+                  K.rrect(c, lx, ly, lw, lh, 3.0, BTN_EDGE_ON if on else th["ledOff"])
+              return c.rows(), w
+
+
+          # --------------------------------------------------------------------------------------------
+          # Control layout: one centred row of controls (METER: along the top; SETUP: centred on the page)
+          # --------------------------------------------------------------------------------------------
+          GRID_GAP = gen_ui.SLOT_X[1] - gen_ui.SLOT_X[0] - gen_ui.SLOT_W      # the grid's normal gap (42 px)
+          SEG_Y = 46          # top of the segment buttons inside their slot (the SDK uses 54); leaves room for the names below
+
+
+          def slot_positions(page):
+              """[(control index, x, y)] for the controls in use. Each page holds one row of up to four controls."""
+              idx = [i for i, c in enumerate(page.controls) if c.widget != "empty"]
+              total = len(idx) * gen_ui.SLOT_W + max(0, len(idx) - 1) * GRID_GAP
+              x0 = (gen_ui.SCREEN_W - total) // 2
+              if page.name == "METER":
+                  y = TOP_Y
+              else:
+                  y = (gen_ui.SCREEN_H - gen_ui.SLOT_H) // 2 + BLOCK_SHIFT
+              return [(i, x0 + j * (gen_ui.SLOT_W + GRID_GAP), y) for j, i in enumerate(idx)]
+
+
+          def radio_component(style, overlay_name, n):
+              """gen_ui.radio_component with the segment buttons raised to SEG_Y so their names fit inside the slot."""
+              width, xs = gen_ui.SEGMENTS[n]
+              children = [gen_ui.focus_child(style),
+                          gen_ui.entry("name", "Label", gen_ui.label_data("Name", style["muted"], 24.0), "15 8 248 34",
+                                       "No", "Show", "Always")]
+              for i, x in enumerate(xs):
+                  children.append(gen_ui.entry("seg %d" % i, "Button",
+                                               gen_ui.button_data("seg%d_on.png" % n, "seg%d_off.png" % n, i, n),
+                                               "%d %d %d 40" % (x, SEG_Y, width), "No", "Show", "Always"))
+              return gen_ui.component_definition(gen_ui.control_actions(overlay_name, double_click=False), children,
+                                                 "00000000")
+
+
+          PARAMS = None       # gen_ui.ParamTable, set in main()
+
+
+          def handle(name):
+              return PARAMS.lookup(name, "make_silver").handle
+
+
+          def tab_component(page, style):
+              """The page's controls (no on-button caption labels: the names are painted in the background),
+              plus the meters on the METER page."""
+              children = []
+              for i, x, y in slot_positions(page):
+                  ctl = page.controls[i]
+                  bounds = "%d %d %d %d" % (x, y, gen_ui.SLOT_W, gen_ui.SLOT_H)
+                  if ctl.widget == "text":
+                      children.append(gen_ui.entry("text %d" % i, "Label",
+                                                   gen_ui.label_data("Text", style["text"], 30.0, "left", ctl.text),
+                                                   bounds, "No", "Show", "Always"))
+                      continue
+                  children.append(gen_ui.entry(ctl.param.name, ctl.definition,
+                                               gen_ui.obj(("version", 1), ("handleName", "Data")), bounds,
+                                               "Yes", "Hide", "Always", remap=[("Data", ctl.param.handle)]))
+              if page.name == "METER":
+                  children += meter_entries()
+              return gen_ui.component_definition([], children, style["background"], bg_image=page.background)
+
+
+          def qlink_rects(page, groups="columns"):
+              """One Q-Link rectangle around the page's row of controls."""
+              pos = [(x, y) for i, x, y in slot_positions(page) if page.controls[i].param is not None]
+              if not pos:
+                  return []
+              pad = gen_ui.QLINK_PAD
+              x = max(min(p[0] for p in pos) - pad, 2)
+              y = max(pos[0][1] - pad, 2)
+              x2 = min(max(p[0] for p in pos) + gen_ui.SLOT_W + pad, gen_ui.SCREEN_W - 2)
+              y2 = min(pos[0][1] + gen_ui.SLOT_H + pad, gen_ui.SCREEN_H - 2)
+              return ["%d %d %d %d" % (x, y, x2 - x, y2 - y)]
+
+
+          _orig_build_qlinks = gen_ui.build_qlinks
+
+
+          def build_qlinks(pages, params, groups="columns"):
+              """As gen_ui, but in Program Mode the knobs only reach the controls (never the read-only readings)."""
+              q = _orig_build_qlinks(pages, params, groups)
+              controls = [handle(n) for n in ("Mode", "View", "Target", "Reset", "Auto Reset", "VU Ref", "TP Limit")]
+              idx = [int(h.split()[-1]) for h in controls]
+              for i, (k, _v) in enumerate(q):
+                  if k == "Program Mode Q-Links":
+                      q[i] = (k, gen_ui.Obj(("Q-Link %d" % (n + 1), idx[n] if n < len(idx) else -1) for n in range(16)))
+              return q
+
+
+          # --------------------------------------------------------------------------------------------
+          # Meter page widgets
+          # --------------------------------------------------------------------------------------------
+          def rect(x, y, w, h):
+              return "%d %d %d %d" % (x, y, w, h)
+
+
+          def text_style(colour, height, style="Regular", just="left verticallyCentred"):
+              return gen_ui.obj(("version", 1),
+                                ("font", gen_ui.obj(("version", 1), ("name", gen_ui.FONT_NAME), ("style", style),
+                                                    ("height", float(height)))),
+                                ("colour", colour), ("justification", just), ("case", "Original"))
+
+
+          def label(name, kind, hname, bounds, colour, height, style="Regular", just="left verticallyCentred",
+                    text=None, visible=None):
+              """A Label bound straight to a handle (kind Name / Value), or fixed text (kind Text).
+              visible: an extra handle (e.g. IndexedEnabling/...) that hides the label while it is invalid."""
+              pairs = [("version", 1), ("textStyle", text_style(colour, height, style, just)), ("type", kind),
+                       ("handleName", hname)]
+              if text is not None:
+                  pairs.append(("text", text))
+              return gen_ui.entry(name, "Label", gen_ui.Obj(pairs), bounds, "No", "Hide" if visible else "Show", "Always",
+                                  invalidating=[visible] if visible else None)
+
+
+          def filmstrip(name, image, frames, hname, bounds, visible=None):
+              data = gen_ui.obj(("version", 2), ("imageType", "FilmStrip"), ("colour", "0"), ("image", image),
+                                ("numFrames", frames), ("handleName", hname))
+              return gen_ui.entry(name, "Image", data, bounds, "No", "Show", "Always",
+                                  invalidating=[visible] if visible else None)
+
+
+          def picture(name, image, bounds):
+              data = gen_ui.obj(("version", 2), ("imageType", "Regular"), ("colour", "0"), ("image", image))
+              return gen_ui.entry(name, "Image", data, bounds, "No", "Show", "Always")
+
+
+          def plotter(name, hname, bounds, data_min, data_max):
+              data = gen_ui.obj(("version", 1), ("backgroundColour", "0"),
+                                ("lineColourStart", "ff5a9cff"), ("lineColourEnd", "ff5a9cff"), ("horizLineGradient", False),
+                                ("lineWidth", 2.0),
+                                ("fillColourStart", "405a9cff"), ("fillColourEnd", "005a9cff"), ("horizFillGradient", False),
+                                ("fillZero", float(data_min)),
+                                ("dataHandle", hname), ("dataMin", float(data_min)), ("dataMax", float(data_max)),
+                                ("drawHistory", True), ("historyDirection", "Left"),
+                                ("historyColour1", "ff5a9cff"), ("historyColour2", "405a9cff"),
+                                ("historyTime", 60.0), ("historySkipFrames", 5))
+              return gen_ui.entry(name, "Plotter", data, bounds, "No", "Show", "Always")
+
+
+          def mode_is(*choices):
+              """Visibility handle: valid while Mode is one of the given choice indices (0 dB, 1 True Peak, 2 LUFS)."""
+              m = handle("Mode")
+              if len(choices) == 1:
+                  return "IndexedEnabling/%d/3/%s" % (choices[0], m)
+              return "RangedEnabling/%d/%d/3/%s" % (min(choices), max(choices), m)
+
+
+          def meter_entries():
+              e = []
+              # --- LED bars --------------------------------------------------------------------------
+              bx, by, bw, bh = BARS
+              for side, x, ch_db, ch_lufs in (("L", BAR_XL, "L", "M"), ("R", BAR_XR, "R", "S")):
+                  cx = x + BAR_W // 2
+                  e.append(label("bar %s name" % side, "Text", "Data", rect(cx - 30, by + 6, 60, 28), "ffd8dee8", 24,
+                                 "SemiBold", "horizontallyCentred verticallyCentred", ch_db, mode_is(0, 1)))
+                  e.append(label("bar %s name lufs" % side, "Text", "Data", rect(cx - 30, by + 6, 60, 28), "ffd8dee8", 24,
+                                 "SemiBold", "horizontallyCentred verticallyCentred", ch_lufs, mode_is(2)))
+                  e.append(filmstrip("bar " + side, "lm_bar.png", BAR_FRAMES, handle("Bar " + side),
+                                     rect(x, BAR_TOP, BAR_W, BAR_H)))
+                  e.append(label("bar %s value" % side, "Value", handle("Bar " + side),
+                                 rect(cx - 48, BAR_TOP + BAR_H + 4, 96, 30), LCD_TEXT, 22, "Regular",
+                                 "horizontallyCentred verticallyCentred"))
+              e.append(label("bars mode", "Value", handle("Mode"), rect(bx + 10, by + bh - 32, bw - 20, 26), LCD_MUTED, 20,
+                             "Regular", "horizontallyCentred verticallyCentred"))
+
+              # --- VU needle -------------------------------------------------------------------------
+              vx, vy, vw, vh = VU
+              e.append(filmstrip("vu legend", "lm_vu_legend.png", 3, handle("Mode"), rect(vx + vw // 2 - 40, vy + 132, 80, 40)))
+              e.append(label("vu ref", "Value", "WithPrefix[0 VU = ]/WithSuffix[ dBFS]/" + handle("VU Ref"),
+                             rect(vx + 90, vy + 176, vw - 180, 26), "ff4a4436", 19, "Regular",
+                             "horizontallyCentred verticallyCentred", visible=mode_is(0, 1)))
+              e.append(label("lu ref", "Value", "WithPrefix[0 LU = ]/" + handle("Target"),
+                             rect(vx + 90, vy + 176, vw - 180, 26), "ff4a4436", 19, "Regular",
+                             "horizontallyCentred verticallyCentred", visible=mode_is(2)))
+              nx, ny, nw, nh = NEEDLE_BOX
+              e.append(filmstrip("vu needle", "lm_needle.png", NEEDLE_FRAMES, handle("Needle"), rect(vx + nx, vy + ny, nw, nh)))
+              e.append(picture("vu hood", "lm_vu_hood.png", rect(vx + 8, vy + vh - HOOD_H - 8, vw - 16, HOOD_H)))
+
+              # --- big readout -----------------------------------------------------------------------
+              rx, ry, rw, rh = READ
+              cap = rect(rx + 16, ry + 8, 300, 26)
+              e.append(label("caption db", "Text", "Data", cap, LCD_MUTED, 20, "SemiBold", text="SAMPLE PEAK", visible=mode_is(0)))
+              e.append(label("caption tp", "Text", "Data", cap, LCD_MUTED, 20, "SemiBold", text="TRUE PEAK", visible=mode_is(1)))
+              e.append(label("caption lufs", "Value", handle("View"), cap, LCD_MUTED, 20, "SemiBold", visible=mode_is(2)))
+              e.append(filmstrip("over", "lm_over.png", 2, handle("TP Over"), rect(rx + rw - 112, ry + 8, 96, 30)))
+              e.append(label("readout", "Value", handle("Readout"), rect(rx + 10, ry + 34, rw - 20, 86), LCD_TEXT, 68,
+                             "SemiBold", "horizontallyCentred verticallyCentred"))
+
+              # --- history ---------------------------------------------------------------------------
+              hx, hy, hw, hh = HIST
+              if SHOW_HISTORY:
+                  lo, hi = LOUD_RANGE           # the plotter reads the parameter's 0..1 value
+                  e.append(plotter("history", handle("Short-term"), rect(hx + 8, hy + 6, hw - 16, hh - 12),
+                                   (HIST_RANGE[0] - lo) / (hi - lo), (HIST_RANGE[1] - lo) / (hi - lo)))
+              e.append(label("history title", "Text", "Data", rect(hx + hw - 230, hy + 4, 216, 20), LCD_MUTED, 16, "Regular",
+                             "right verticallyCentred", text="SHORT-TERM, LAST 60 S"))
+
+              # --- readings grid ---------------------------------------------------------------------
+              sx, sy, sw, sh = STATS
+              grid = (("Integrated", "Vs Target"), ("Short-term", "Momentary"), ("Short Max", "Mom Max"),
+                      ("LRA", "PLR"), ("True Peak", "Sample Peak"), ("RMS", "Target"))
+              cw, rh2 = (sw - 32) // 2, 52
+              for r, pair in enumerate(grid):
+                  for c, name in enumerate(pair):
+                      x = sx + 16 + c * (cw + 0)
+                      y = sy + 8 + r * rh2
+                      h = handle(name)
+                      e.append(label(name + " name", "Name", h, rect(x + 8, y + 2, cw - 16, 20), INK_MUTED, 19))
+                      strong = name in ("Integrated", "Vs Target")
+                      e.append(label(name + " value", "Value", h, rect(x + 8, y + 20, cw - 16, 30),
+                                     "ff1450c4" if strong else INK, 28, "SemiBold" if strong else "Regular"))
+              return e
+
+
+          # --------------------------------------------------------------------------------------------
+          # Images
+          # --------------------------------------------------------------------------------------------
+          def write_png_rgba(path, width, rows):
+              def chunk(tag, data):
+                  body = tag + data
+                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+              raw = b"".join(b"\0" + bytes(r) for r in rows)
+              png = b"\x89PNG\r\n\x1a\n"
+              png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, len(rows), 8, 6, 0, 0, 0))
+              png += chunk(b"IDAT", zlib.compress(raw, 9))
+              png += chunk(b"IEND", b"")
+              with open(path, "wb") as f:
+                  f.write(png)
+
+
+          def canvas_rows(c):
+              return [bytearray(r) for r in c.rows()]
+
+
+          def seg_colour(db, lit):
+              """LED colour for the segment that starts at `db`: blue, amber from -9 dB, red above 0 dB."""
+              if db >= 0:
+                  on, off = (255, 66, 58), (82, 30, 30)
+              elif db >= -9:
+                  on, off = (255, 186, 40), (78, 62, 26)
+              else:
+                  on, off = (70, 150, 255), (28, 44, 74)
+              return on + (255,) if lit else off + (255,)
+
+
+          def make_bar_strip(path):
+              """BAR_FRAMES frames, frame k = k segments lit (k = 0: all dark). Built by copying rows."""
+              lit_c = K.Canvas(BAR_W, BAR_H)
+              off_c = K.Canvas(BAR_W, BAR_H)
+              for s in range(BAR_SEGS):                       # s = 0 is the bottom segment (-60 .. -59 dB)
+                  y = BAR_H - (s + 1) * SEG_PITCH + (SEG_PITCH - SEG_LIT) // 2
+                  db = BAR_LO + s
+                  K.rrect(lit_c, 2, y, BAR_W - 4, SEG_LIT, 1.0, seg_colour(db, True))
+                  K.rrect(off_c, 2, y, BAR_W - 4, SEG_LIT, 1.0, seg_colour(db, False))
+              lit, off = canvas_rows(lit_c), canvas_rows(off_c)
+              rows = []
+              for k in range(BAR_FRAMES):
+                  cut = BAR_H - k * SEG_PITCH                  # rows below `cut` are lit
+                  rows += [bytes(lit[y]) if y >= cut else bytes(off[y]) for y in range(BAR_H)]
+              write_png_rgba(path, BAR_W, rows)
+
+
+          def needle_fraction(v):
+              lo, hi = 10 ** (-20 / 20.0), 10 ** (3 / 20.0)
+              return min(1.0, max(0.0, (10 ** (v / 20.0) - lo) / (hi - lo)))
+
+
+          def needle_angle(f):
+              return math.radians(-NEEDLE_SWEEP + 2.0 * NEEDLE_SWEEP * f)
+
+
+          def make_needle_strip(path):
+              """NEEDLE_FRAMES transparent frames of the needle alone. Only the area the needle sweeps (NEEDLE_BOX) is
+              drawn, at NEEDLE_SCALE of screen size (the MPC scales the frames up to the box)."""
+              bx, by, bw, bh = NEEDLE_BOX
+              s = NEEDLE_SCALE
+              w, h = int(round(bw * s)), int(round(bh * s))
+              px, py = (PIVOT[0] - bx) * s, (PIVOT[1] - by) * s
+              tip, root = (ARC_R + 18) * s, (PIVOT[1] - (by + bh)) * s
+              rows = []
+              for k in range(NEEDLE_FRAMES):
+                  a = needle_angle(k / float(NEEDLE_FRAMES - 1))
+                  c = K.Canvas(w, h)
+                  x0, y0 = px + root * math.sin(a), py - root * math.cos(a)
+                  x1, y1 = px + tip * math.sin(a), py - tip * math.cos(a)
+                  K.capsule(c, x0 + 1.5, y0 + 1.5, x1 + 1.5, y1 + 1.5, 2.6, (60, 40, 10, 50))       # soft shadow
+                  K.capsule(c, x0, y0, x1, y1, 2.0, (20, 18, 16, 255))
+                  rows += c.rows()
+              write_png_rgba(path, w, rows)
+
+
+          def make_vu_hood(path):
+              w, h = VU[2] - 16, HOOD_H
+              c = K.Canvas(w, h)
+              K.rrect(c, 0, 0, w, h + 12, 10.0, K.vgrad(0, h, (46, 48, 54, 255), (16, 17, 20, 255)))
+              K.rrect(c, 0, 0, w, 2, 1.0, (90, 94, 102, 255))
+              write_png_rgba(path, w, c.rows())
+
+
+          def make_vu_legend(path):
+              """3 frames (Mode dB / True Peak / LUFS): VU, VU, LU on the cream face."""
+              w, h = 80, 40
+              rows = []
+              for key in ("s30:VU", "s30:VU", "s30:LU"):
+                  fr = [bytearray(w * 4) for _ in range(h)]
+                  tw, th, tb = text_size(key)
+                  blend_text(fr, key, (w - tw) // 2, (h - th) // 2, (40, 36, 30), alpha_rows=True)
+                  rows += [bytes(r) for r in fr]
+              write_png_rgba(path, w, rows)
+
+
+          def make_over_lamp(path):
+              w, h = 96, 30
+              rows = []
+              for lit in (False, True):
+                  c = K.Canvas(w, h)
+                  if lit:
+                      K.rrect(c, 0, 0, w, h, 7.0, (255, 40, 40, 90))
+                  K.rrect(c, 2, 2, w - 4, h - 4, 6.0, (220, 28, 28, 255) if lit else (66, 24, 24, 255))
+                  K.rrect_outline(c, 2, 2, w - 4, h - 4, 6.0, 1.0, (255, 150, 150, 255) if lit else (110, 50, 50, 255))
+                  fr = canvas_rows(c)
+                  tw, th, tb = text_size("s17:OVER")
+                  blend_text(fr, "s17:OVER", (w - tw) // 2, (h - th) // 2,
+                             (255, 255, 255) if lit else (150, 90, 90), alpha_rows=False)
+                  rows += [bytes(r) for r in fr]
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Page background: brushed aluminium, 1280 x 628 (the tab area, drawn 1:1), logo, title, captions
+          # --------------------------------------------------------------------------------------------
+          def draw_logo():
+              """The invader on a black plate (a canvas with room for the drop shadow), LOGO_PLATE px square.
+              Cell geometry is measured from the supplied 512 px logo and scaled."""
+              s = LOGO_PLATE / 512.0
+              pad, size = 6, LOGO_PLATE
+              c = K.Canvas(size + 2 * pad, size + 2 * pad)
+              rad = size * 0.11
+              K.rrect(c, pad, pad + 3, size, size, rad, (0, 0, 0, 110))
+              K.rrect(c, pad, pad, size, size, rad, K.vgrad(pad, pad + size, (24, 25, 28, 255), (2, 2, 3, 255)))
+              K.rrect_outline(c, pad, pad, size, size, rad, 1.0, (112, 116, 124, 255))
+              for r, line in enumerate(LOGO):
+                  for col, ch in enumerate(line):
+                      if ch == "#":
+                          K.rrect(c, pad + (85 + 43.57 * col) * s, pad + (99 + 43.0 * r) * s, 37 * s, 37 * s, 1.0,
+                                  (248, 250, 253, 255))
+              return c, pad
+
+
+          def blend_canvas(rows, canvas, x0, y0):
+              for y in range(canvas.h):
+                  if not 0 <= y0 + y < len(rows):
+                      continue
+                  row = rows[y0 + y]
+                  for x in range(canvas.w):
+                      r, g, b, a = canvas.px[y * canvas.w + x]
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + x) * 4
+                      row[i] = clamp8(row[i] + (r - row[i]) * a)
+                      row[i + 1] = clamp8(row[i + 1] + (g - row[i + 1]) * a)
+                      row[i + 2] = clamp8(row[i + 2] + (b - row[i + 2]) * a)
+
+
+          def text_size(name):
+              w, h, baseline, _ = TEXT_MASKS[name]
+              return w, h, baseline
+
+
+          def blend_text(rows, name, x0, y0, colour, alpha_rows=False):
+              """Paint a pre-rendered mask. alpha_rows: the target is transparent, so write colour + alpha."""
+              w, h, _baseline, packed = TEXT_MASKS[name]
+              alpha = zlib.decompress(base64.b64decode(packed))
+              for yy in range(h):
+                  if not 0 <= y0 + yy < len(rows):
+                      continue
+                  row = rows[y0 + yy]
+                  for xx in range(w):
+                      a = alpha[yy * w + xx] / 255.0
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + xx) * 4
+                      if alpha_rows:
+                          row[i], row[i + 1], row[i + 2] = colour[0], colour[1], colour[2]
+                          row[i + 3] = max(row[i + 3], clamp8(a * 255))
+                      else:
+                          for k in range(3):
+                              row[i + k] = clamp8(row[i + k] + (colour[k] - row[i + k]) * a)
+
+
+          def text_at(rows, key, cx, baseline_y, colour, align="centre"):
+              w, _h, b = text_size(key)
+              x = int(round(cx - w / 2.0)) if align == "centre" else (int(round(cx - w)) if align == "right" else int(cx))
+              blend_text(rows, key, x, int(round(baseline_y)) - b, colour)
+
+
+          def fill_rows(rows, x, y, w, h, colour):
+              for yy in range(max(0, y), min(len(rows), y + h)):
+                  row = rows[yy]
+                  for xx in range(max(0, x), min(len(row) // 4, x + w)):
+                      i = xx * 4
+                      row[i], row[i + 1], row[i + 2] = colour[0], colour[1], colour[2]
+
+
+          def panel(rows, box, fill, radius=12.0, bezel=True):
+              """A recessed panel: dark bevel + shadow, then the face."""
+              x, y, w, h = box
+              c = K.Canvas(w + 8, h + 8)
+              K.rrect(c, 3, 5, w, h, radius + 1, (0, 0, 0, 70))                 # shadow
+              if bezel:
+                  K.rrect(c, 4, 4, w, h, radius, K.vgrad(4, 4 + h, (96, 100, 108, 255), (236, 238, 242, 255)))
+                  K.rrect(c, 6, 6, w - 4, h - 4, radius - 2, fill)
+              else:
+                  K.rrect(c, 4, 4, w, h, radius, fill)
+              blend_canvas(rows, c, x - 4, y - 4)
+
+
+          def brushed_rows(w, h, seed):
+              base = K.parse_argb(SILVER_GREYS["bg"])
+              amp = 7.0
+              sheen = [7 * math.sin(x / 190.0 + 0.6) + 4 * math.sin(x / 53.0) + 5 * math.sin(x / 611.0) for x in range(w)]
+              runs = w // 41 + 2
+              rows = []
+              for y in range(h):
+                  fall = -((y / float(h)) - 0.5) * 8.0                  # slightly lighter at the top
+                  row_n = (h01(y * 977 + seed) - 0.5) * 1.2 * amp
+                  run_n = [(h01(y * 131 + k * 7919 + seed + 5) - 0.5) * 0.9 * amp for k in range(runs)]
+                  row = bytearray(w * 4)
+                  for x in range(w):
+                      fine = (h01(x * 31 + y * 1009 + seed + 11) - 0.5) * 0.25 * amp
+                      d = sheen[x] + fall + row_n + run_n[x // 41] + fine
+                      i = x * 4
+                      row[i] = clamp8(base[0] + d)
+                      row[i + 1] = clamp8(base[1] + d)
+                      row[i + 2] = clamp8(base[2] + d * 1.05)
+                      row[i + 3] = 255
+                  rows.append(row)
+              return rows
+
+
+          def caption_spots(page):
+              """[(text key, centre x, baseline y)] for the names under every segmented choice switch."""
+              spots = []
+              pos = {i: (x, y) for i, x, y in slot_positions(page)}
+              for i, ctl in enumerate(page.controls):
+                  if ctl.widget == "empty" or not ctl.definition.startswith("radio"):
+                      continue
+                  x0, y0 = pos[i]
+                  width, xs = gen_ui.SEGMENTS[len(ctl.param.choices)]
+                  for choice, x in zip(ctl.param.choices, xs):
+                      spots.append(("cap:" + CAPTIONS.get(choice, choice.upper()), x0 + x + width / 2.0, y0 + SEG_Y + 56))
+              return spots
+
+
+          def draw_logo_and_title(rows, w, h):
+              logo, pad = draw_logo()
+              plate_x = w - LOGO_MARGIN - LOGO_PLATE
+              plate_y = h - LOGO_MARGIN - LOGO_PLATE
+              blend_canvas(rows, logo, plate_x - pad, plate_y - pad)
+              # title, to the left of the logo, its baseline level with the bottom of the invader artwork
+              tw, th, tb = text_size("title")
+              art_bottom = plate_y + int(round((99 + 43.0 * (len(LOGO) - 1) + 37) * LOGO_PLATE / 512.0))
+              blend_text(rows, "title", plate_x - TITLE_GAP - tw, art_bottom - tb, TEXT_BLACK)
+
+
+          def draw_captions(rows, page):
+              for key, cx, baseline_y in caption_spots(page):
+                  if key not in TEXT_MASKS:
+                      print('make_silver: no pre-rendered text for "%s"; that button name is not drawn.' % key)
+                      continue
+                  text_at(rows, key, cx, baseline_y, TEXT_BLACK)
+
+
+          def draw_bars_panel(rows):
+              panel(rows, BARS, LCD + (255,))
+              # scale: numbers between the bars, tick marks beside each bar
+              cx = (BAR_XL + BAR_W + BAR_XR) / 2.0
+              marks = (3, 0, -3, -6, -9, -12, -18, -24, -30, -40, -50, -60)
+              for db in marks:
+                  y = BAR_TOP + BAR_H - (db - BAR_LO) * SEG_PITCH
+                  col = (255, 120, 110) if db > 0 else (170, 180, 196)
+                  fill_rows(rows, BAR_XL + BAR_W + 3, y, 6, 1, col)
+                  fill_rows(rows, BAR_XR - 9, y, 6, 1, col)
+                  key = "s13:" + ("+3" if db == 3 else str(db))
+                  text_at(rows, key, cx, y + 5, col)
+              # dark wells behind the bars
+              for x in (BAR_XL, BAR_XR):
+                  fill_rows(rows, x - 1, BAR_TOP - 2, BAR_W + 2, BAR_H + 4, (8, 9, 12))
+
+
+          def draw_vu_panel(rows):
+              vx, vy, vw, vh = VU
+              panel(rows, VU, (34, 36, 40, 255), 14.0)
+              # cream face
+              face = K.Canvas(vw - 16, vh - 16)
+              fw, fh = face.w, face.h
+              K.rrect(face, 0, 0, fw, fh, 9.0, K.vgrad(0, fh, (246, 236, 206, 255), (226, 212, 172, 255)))
+              ox, oy = vx + 8, vy + 8                       # face origin in tab coordinates
+              pxc, pyc = PIVOT[0] - 8, PIVOT[1] - 8         # pivot in face coordinates
+              ink = (44, 38, 30, 255)
+              red = (200, 36, 30, 255)
+
+              def at(r, f):
+                  a = needle_angle(f)
+                  return pxc + r * math.sin(a), pyc - r * math.cos(a)
+
+              # main arc (black up to 0, red band from 0 to +3)
+              f0 = needle_fraction(0.0)
+              K.arc(face, pxc, pyc, ARC_R - 1.2, ARC_R + 1.2, needle_angle(0.0), needle_angle(f0), ink, cap=False)
+              K.arc(face, pxc, pyc, ARC_R - 1.2, ARC_R + 9.0, needle_angle(f0), needle_angle(1.0), red, cap=False)
+              # ticks
+              major = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
+              minor = (-15, -6, -4, -0.5, 0.5, 1.5, 2.5)
+              for v in major + minor:
+                  f = needle_fraction(v)
+                  r1 = ARC_R + (14 if v in major else 8)
+                  x0, y0 = at(ARC_R, f)
+                  x1, y1 = at(r1, f)
+                  K.capsule(face, x0, y0, x1, y1, 1.3 if v in major else 0.9, red if v > 0 else ink)
+              rows_face = canvas_rows(face)
+              # numbers
+              for v in major:
+                  f = needle_fraction(v)
+                  x, y = at(ARC_R + 30, f)
+                  key = "s17:" + str(abs(v))
+                  w_, h_, b_ = text_size(key)
+                  blend_text(rows_face, key, int(round(x - w_ / 2.0)), int(round(y - h_ / 2.0)),
+                             (200, 36, 30) if v > 0 else (44, 38, 30))
+              # - and + at the ends of the scale
+              for sym, f, colour in (("s17:−", 0.0, (44, 38, 30)), ("s17:+", 1.0, (200, 36, 30))):
+                  x, y = at(ARC_R - 22, f)
+                  w_, h_, b_ = text_size(sym)
+                  blend_text(rows_face, sym, int(round(x - w_ / 2.0)), int(round(y - h_ / 2.0)), colour)
+              # paste the face (rounded corners via the canvas alpha)
+              fc = K.Canvas(fw, fh)
+              fc.px = []
+              for r in rows_face:
+                  for i in range(0, len(r), 4):
+                      fc.px.append((float(r[i]), float(r[i + 1]), float(r[i + 2]), r[i + 3] / 255.0))
+              blend_canvas(rows, fc, ox, oy)
+
+
+          def draw_lcd_panels(rows):
+              panel(rows, READ, LCD + (255,))
+              panel(rows, HIST, LCD + (255,))
+              # history grid: a line every 10 LU (the plotter spans HIST_RANGE over its height)
+              hx, hy, hw, hh = HIST
+              top, height = hy + 6, hh - 12
+              lo, hi = HIST_RANGE
+              for v in (-10, -20, -30):
+                  y = int(round(top + height * (hi - v) / (hi - lo)))
+                  for x in range(hx + 40, hx + hw - 10, 6):
+                      fill_rows(rows, x, y, 3, 1, (58, 66, 82))
+                  text_at(rows, "s13:%d" % v, hx + 36, y + 5, (110, 124, 150), align="right")
+
+
+          def draw_stats_panel(rows):
+              x, y, w, h = STATS
+              panel(rows, STATS, K.vgrad(y, y + h, (214, 217, 222, 255), (196, 199, 205, 255)), 12.0)
+              # light separators between the rows of the grid
+              for r in range(1, 6):
+                  yy = y + 8 + r * 52 - 2
+                  fill_rows(rows, x + 20, yy, w - 40, 1, (160, 164, 172))
+                  fill_rows(rows, x + 20, yy + 1, w - 40, 1, (232, 234, 238))
+              fill_rows(rows, x + w // 2, y + 14, 1, h - 28, (160, 164, 172))
+              fill_rows(rows, x + w // 2 + 1, y + 14, 1, h - 28, (232, 234, 238))
+
+
+          def make_background(path, page, w=1280, h=628, seed=41):
+              rows = brushed_rows(w, h, seed)
+              if page.name == "METER":
+                  draw_bars_panel(rows)
+                  draw_vu_panel(rows)
+                  draw_lcd_panels(rows)
+                  draw_stats_panel(rows)
+              draw_logo_and_title(rows, w, h)
+              draw_captions(rows, page)
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          def install_theme():
+              gen_ui.tab_component = tab_component
+              gen_ui.radio_component = radio_component
+              gen_ui.qlink_rects = qlink_rects
+              gen_ui.build_qlinks = build_qlinks
+              K.GREYS.update(SILVER_GREYS)
+              K.THEMES["silver"] = ACCENT
+              K.knob_static = knob_static
+              K.fader_cap = fader_cap
+              K.render_button = render_button
+
+
+          def main(argv):
+              global PARAMS
+              install_theme()
+              params = os.path.join(HERE, "build", "params.json")
+              ui = os.path.join(HERE, "ui.json")
+              out = os.path.join(HERE, "skins")
+              if not os.path.isfile(params):
+                  print("make_silver: build/params.json is missing. Run first:\n"
+                        '  python tools/build.py "plugins/Loudness Meter" --target native')
+                  return 1
+              if os.path.isdir(out):
+                  shutil.rmtree(out)
+              os.makedirs(out)
+              PARAMS = gen_ui.ParamTable(gen_ui.load_params(params))
+              pages = gen_ui.load_ui(ui, PARAMS)[0]
+              for page in pages:
+                  make_background(os.path.join(out, page.background), page)
+              make_bar_strip(os.path.join(out, "lm_bar.png"))
+              make_needle_strip(os.path.join(out, "lm_needle.png"))
+              make_vu_hood(os.path.join(out, "lm_vu_hood.png"))
+              make_vu_legend(os.path.join(out, "lm_vu_legend.png"))
+              make_over_lamp(os.path.join(out, "lm_over.png"))
+              gen_ui.generate(params, ui, out, assets_dir=out, quiet=False, kit_cache=None)
+              print("make_silver: wrote %s (%d files)" % (out, len(os.listdir(out))))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          LMEOF
+      - name: First build (native) to list the parameters
+        run: python tools/build.py "plugins/Loudness Meter" --target native
+      - name: Draw the brushed silver skin and meters
+        run: python "plugins/Loudness Meter/make_silver.py"
+      - name: Build, validate, make MPC folder
+        run: python tools/build.py "plugins/Loudness Meter"
+      - name: Upload MPC plugin folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Loudness-Meter-MPC
+          path: plugins/Loudness Meter/build/*VST*
+          if-no-files-found: error
