@@ -1,0 +1,1079 @@
+name: Build Comb Filter
+
+# One-file setup: this workflow writes the whole Comb Filter project (code, UI layout and the brushed
+# silver skin generator, which also paints the logo, title and button names) into
+# plugins/Comb Filter/ on the build server, then builds and validates it.
+# To change the plugin later, edit the file contents below.
+
+on:
+  push:
+  workflow_dispatch:   # lets you press "Run workflow" from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write plugin files
+        run: |
+          set -e
+          mkdir -p "plugins/Comb Filter"
+          cd "plugins/Comb Filter"
+          mkdir -p "$(dirname "plugin.json")"
+          cat > "plugin.json" <<'SWEEPEOF'
+          {
+            "name": "Comb Filter",
+            "manufacturer": "gltchsqnz",
+            "version": "1.0.0",
+            "format": "vst2",
+            "kind": "effect",
+            "uid": "GPGE",
+            "numInputs": 2,
+            "numOutputs": 2,
+            "category": "Effect",
+            "shortName": "Comb Filter",
+            "knobs": [
+              {
+                "parameter": 3,
+                "label": "Freq"
+              },
+              {
+                "parameter": 4,
+                "label": "Amount"
+              },
+              {
+                "parameter": 5,
+                "label": "Damping"
+              }
+            ],
+            "shiftKnobs": [
+              {
+                "parameter": 7,
+                "label": "Drive"
+              },
+              {
+                "parameter": 8,
+                "label": "Mix"
+              },
+              {
+                "parameter": 6,
+                "label": "Spread"
+              }
+            ],
+            "file32": "VST/comb-filter-arm32.so",
+            "file64": "VST/comb-filter-arm64.so",
+            "description": "Stereo comb filter with a positive / negative switch, feedback or feedforward type, damping, stereo spread, overdrive and output level.",
+            "author": "gltchsqnz",
+            "url": "",
+            "license": "MIT"
+          }
+          SWEEPEOF
+          mkdir -p "$(dirname "ui.json")"
+          cat > "ui.json" <<'SWEEPEOF'
+          {
+            "kit": "silver",
+            "qlinkGroups": "rows",
+            "style": {
+              "background": "ffc4c7cd",
+              "text": "ff16181b",
+              "muted": "ff3d4148"
+            },
+            "pages": [
+              {
+                "name": "COMB",
+                "background": "silver_bg.png",
+                "controls": [
+                  {
+                    "param": "Freq",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Amount",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Damping",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Spread",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Polarity",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "Type",
+                    "widget": "switch"
+                  },
+                  {
+                    "param": "Drive",
+                    "widget": "knob"
+                  },
+                  "empty",
+                  {
+                    "param": "Mix",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Level",
+                    "widget": "fader"
+                  },
+                  "empty",
+                  "empty"
+                ]
+              }
+            ]
+          }
+          SWEEPEOF
+          mkdir -p "$(dirname "README.md")"
+          cat > "README.md" <<'SWEEPEOF'
+          # Comb Filter
+
+          A stereo comb filter for Akai MPC standalone, by gltchsqnz. It mixes a short delay back with the signal,
+          which carves a regular row of peaks and notches into the spectrum: from metallic ringing and flanging
+          to robot voices and plucked-string tones.
+
+          ## Parameters
+
+          | # | Name | What it does |
+          |---|------|--------------|
+          | 0 | Level | Output volume, -24 to +12 dB |
+          | 1 | Polarity | **Positive**: peaks at the Freq and its multiples (2x, 3x ...), a bright, metallic ring. **Negative**: peaks at the odd multiples of half the Freq (0.5x, 1.5x ...), a hollower sound that rings an octave lower |
+          | 2 | Type | **Feedback**: resonant, the comb rings on after the sound stops. **Feedforward**: notches and peaks only, no ringing (flanger / phaser-like) |
+          | 3 | Freq | The comb's pitch, 40 Hz to 8 kHz. Play it like a tuned resonator |
+          | 4 | Amount | Feedback (Feedback type) or depth (Feedforward type), 0 to 100 % |
+          | 5 | Damping | Darkens the loop so every repeat loses highs; low values ring bright, high values sound like a damped string. Pitch stays on Freq |
+          | 6 | Spread | Detunes the left and right combs apart, up to an octave at 100 % |
+          | 7 | Drive | Overdrive before the comb, 0 (clean) to 100 % |
+          | 8 | Mix | Dry/wet |
+
+          Programs: Metal Pipe, Hollow Flange, Plucked String, Robot Voice, Wide Phase, Hot Resonator, Odd Harmonics.
+
+          ## Notes
+
+          - The wet signal is level-matched, so Amount changes the sound more than the volume. Resonant settings
+            are still louder at their peaks: use Level, or lower Mix, if they get hot.
+          - A limiter inside the feedback loop keeps even 100 % Amount with full Drive stable.
+          - Feedback combs ring on after the input stops (the plugin tells the MPC to keep processing for 8 s).
+          - Freq follows the delay `1 / Freq`: at 441 Hz the delay is 100 samples. Keep Damping modest above about 4 kHz.
+          - Not tempo-synced: Freq is a pitch, not a note length.
+          - CPU is very low: one delay read, one one-pole filter and up to two `fastTanh()` per sample per channel.
+
+          ## Look
+
+          Brushed silver skin with blue buttons (names painted underneath), rows of controls centred on the screen,
+          and the gltchsqnz logo with the title bottom right. `make_silver.py` draws it; the logo size (`LOGO_PLATE`,
+          about 1.5 cm on 7" MPCs) and colours are constants at the top of that file.
+
+          ## Knob FX mapping
+
+          The SDK requires effects to declare one. It only matters on an MPC Sample:
+          knobs Freq / Amount / Damping; SHIFT + knobs Drive / Mix / Spread.
+
+          ## Licence
+
+          MIT. Built on the MPC Plugin SDK's `dsp/delay_line.h`, `dsp/onepole.h` and `dsp/math.h`.
+          SWEEPEOF
+          mkdir -p "$(dirname "src/CombFilter.cpp")"
+          cat > "src/CombFilter.cpp" <<'SWEEPEOF'
+          // Comb Filter - an MPC insert effect plugin by gltchsqnz
+          //
+          // A stereo comb filter with a positive / negative switch, a feedback or feedforward type, damping,
+          // stereo spread, an overdrive and an output level. The audio core is in CombDsp.h (read its header for
+          // the maths); this file declares the parameters and runs the two channels.
+          //
+          // Signal flow:
+          //     in -> DC block -> Drive (overdrive) -> comb -> Mix with the dry input -> Level -> out
+          //
+          // Parameters (order is permanent once released; append new ones at the END):
+          //   0 Level      output volume (dB)  - harmless on load, as the host nudges param 0
+          //   1 Polarity   Positive: peaks at f, 2f, 3f ...    Negative: peaks at f/2, 3f/2, ... (hollow, an octave lower)
+          //   2 Type       Feedback (resonant, rings) or Feedforward (notches only, no ringing)
+          //   3 Freq       the comb's pitch (Hz): the delay is 1 / Freq
+          //   4 Amount     feedback (Feedback type) or depth (Feedforward type), %
+          //   5 Damping    darkens the loop: each repeat loses highs (%)
+          //   6 Spread     detunes the left and right combs apart, up to an octave (%)
+          //   7 Drive      overdrive before the comb (%)
+          //   8 Mix        dry/wet (%)
+          //
+          // CPU: per sample and channel there is one delay read, one one-pole filter and up to two fastTanh();
+          // pitch and coefficients are updated every kCtrl samples.
+
+          #include "mpc_plugin.h"
+          #include "CombDsp.h"
+
+          #include <algorithm>
+          #include <cmath>
+
+          namespace {
+
+          enum ParamIndex
+          {
+              kLevel = 0,  // dB
+              kPolarity,   // choice
+              kType,       // choice
+              kFreq,       // Hz
+              kAmount,     // %
+              kDamping,    // %
+              kSpread,     // %
+              kDrive,      // %
+              kMix,        // % wet
+              kNumParams
+          };
+
+          constexpr int kMaxChannels = 2;
+          constexpr int kCtrl        = 32;     // control-rate block (samples)
+
+          enum Polarity { kPositive = 0, kNegative };
+          enum Type     { kFeedback = 0, kFeedforward };
+
+          // One-pole smoother, advanced once per control block.
+          struct Smooth
+          {
+              float v = 0.0f, rate = 0.12f;
+              void  snap(float x) { v = x; }
+              float next(float target) { v += rate * (target - v); return v; }
+          };
+
+          // Per-sample smoother for gain-type controls (avoids zipper noise).
+          struct SampleSmooth
+          {
+              float v = 0.0f, rate = 0.002f;
+              void  snap(float x) { v = x; }
+              float next(float target) { v += rate * (target - v); return v; }
+          };
+
+          } // namespace
+
+          class CombFilter : public mpc::Plugin
+          {
+          public:
+              CombFilter() : mpc::Plugin(makeInfo())
+              {
+                  using namespace mpc;
+
+                  // ids are saved in projects: never rename them once released.
+                  addParam(floatParam ("level",    "Level",    -24.0f, 12.0f, 0.0f,   "dB", 1));
+                  addParam(choiceParam("polarity", "Polarity", {"Positive", "Negative"}, kPositive));
+                  addParam(choiceParam("type",     "Type",     {"Feedback", "Feedforward"}, kFeedback));
+                  addParam(logParam   ("freq",     "Freq",     comb::kMinFreq, comb::kMaxFreq, 220.0f, "Hz", 0));
+                  addParam(floatParam ("amount",   "Amount",   0.0f, 100.0f, 60.0f,   "%",  0));
+                  addParam(floatParam ("damping",  "Damping",  0.0f, 100.0f, 25.0f,   "%",  0));
+                  addParam(floatParam ("spread",   "Spread",   0.0f, 100.0f, 0.0f,    "%",  0));
+                  addParam(floatParam ("drive",    "Drive",    0.0f, 100.0f, 0.0f,    "%",  0));
+                  addParam(floatParam ("mix",      "Mix",      0.0f, 100.0f, 100.0f,  "%",  0));
+
+                  // Built-in programs, plain values in parameter order:
+                  //        Level Polarity Type Freq Amount Damping Spread Drive Mix
+                  addProgram("Metal Pipe",     {0.0f, kPositive, kFeedback,    330.0f, 85.0f, 35.0f,  0.0f,  0.0f, 100.0f});
+                  addProgram("Hollow Flange",  {0.0f, kNegative, kFeedback,    120.0f, 70.0f, 20.0f, 25.0f,  0.0f, 100.0f});
+                  addProgram("Plucked String", {0.0f, kPositive, kFeedback,    196.0f, 92.0f, 55.0f, 10.0f, 15.0f, 100.0f});
+                  addProgram("Robot Voice",    {0.0f, kPositive, kFeedforward, 110.0f, 80.0f,  0.0f,  0.0f, 10.0f, 100.0f});
+                  addProgram("Wide Phase",     {0.0f, kNegative, kFeedforward, 700.0f, 55.0f,  0.0f, 45.0f,  0.0f,  60.0f});
+                  addProgram("Hot Resonator",  {-3.0f, kPositive, kFeedback,   440.0f, 80.0f, 30.0f, 20.0f, 60.0f,  80.0f});
+                  addProgram("Odd Harmonics",  {0.0f, kNegative, kFeedback,    220.0f, 75.0f, 40.0f,  0.0f,  0.0f, 100.0f});
+              }
+
+              void prepare(double sampleRate, int maxBlockSize) override
+              {
+                  (void)maxBlockSize;
+                  for (comb::Channel& c : channels_) c.prepare(sampleRate);
+                  reset();
+              }
+
+              void reset() override
+              {
+                  for (comb::Channel& c : channels_) c.reset();
+                  level_.snap(dbToGain(get(kLevel)));
+                  mix_.snap(get(kMix) * 0.01f);
+                  logFreq_.snap(std::log2(get(kFreq)));
+                  amount_.snap(get(kAmount) * 0.01f);
+                  damping_.snap(get(kDamping) * 0.01f);
+                  spread_.snap(get(kSpread) * 0.01f);
+                  drive_.snap(get(kDrive) * 0.01f);
+              }
+
+              void process(mpc::ProcessContext& ctx) override
+              {
+                  const int numFrames   = ctx.numFrames;
+                  const int numChannels = mpc::clamp(ctx.numOutputs, 0, kMaxChannels);
+
+                  // --- read parameters once per block ---------------------------------
+                  comb::Block base;
+                  base.negative    = getInt(kPolarity) == kNegative;
+                  base.feedforward = getInt(kType) == kFeedforward;
+                  const float freqT    = std::log2(std::max(1.0f, get(kFreq)));
+                  const float amountT  = get(kAmount) * 0.01f;
+                  const float dampingT = get(kDamping) * 0.01f;
+                  const float spreadT  = get(kSpread) * 0.01f;
+                  const float driveT   = get(kDrive) * 0.01f;
+                  const float levelT   = dbToGain(get(kLevel));
+                  const float mixT     = get(kMix) * 0.01f;
+
+                  for (int start = 0; start < numFrames; start += kCtrl)
+                  {
+                      const int len = std::min(kCtrl, numFrames - start);
+
+                      base.amount  = amount_.next(amountT);
+                      base.damping = damping_.next(dampingT);
+                      base.drive   = drive_.next(driveT);
+                      const float freq   = std::exp2(logFreq_.next(freqT));
+                      const float spread = spread_.next(spreadT);
+
+                      float freqs[kMaxChannels];
+                      comb::spreadFreqs(freq, spread, freqs[0], freqs[1]);
+                      for (int ch = 0; ch < numChannels; ++ch)
+                      {
+                          comb::Block b = base;
+                          b.freq = freqs[ch];
+                          channels_[ch].setBlock(b, len);
+                      }
+
+                      for (int n = 0; n < len; ++n)
+                      {
+                          const int i = start + n;
+                          const float level = level_.next(levelT);
+                          const float mix   = mix_.next(mixT);
+
+                          for (int ch = 0; ch < numChannels; ++ch)
+                          {
+                              const float dry = (ctx.inputs != nullptr && ch < ctx.numInputs && ctx.inputs[ch] != nullptr)
+                                                    ? ctx.inputs[ch][i] : 0.0f;
+                              const float wet = channels_[ch].process(dry);
+                              ctx.outputs[ch][i] = (dry + (wet - dry) * mix) * level;
+                          }
+                      }
+                  }
+              }
+
+              void parameterChanged(int index, float plainValue) override { (void)index; (void)plainValue; }
+
+          private:
+              static mpc::PluginInfo makeInfo()
+              {
+                  mpc::PluginInfo info;
+                  info.name         = "Comb Filter";
+                  info.vendor       = "gltchsqnz";   // must match plugin.json "manufacturer"
+                  info.uniqueId     = MPC_FOURCC(kUid[0], kUid[1], kUid[2], kUid[3]);   // must match plugin.json "uid"
+                  info.version      = 1000;           // 1.0.0.0
+                  info.isInstrument = false;
+                  info.numInputs    = 2;
+                  info.numOutputs   = 2;
+                  info.tailSamples  = 8 * 44100;      // a resonant comb rings on after the input stops
+                  return info;
+              }
+
+              static constexpr char kUid[5] = "GPGE";
+
+              static float dbToGain(float dB) { return std::pow(10.0f, dB / 20.0f); }
+
+              comb::Channel channels_[kMaxChannels];
+              SampleSmooth  level_, mix_;
+              Smooth        logFreq_, amount_, damping_, spread_, drive_;
+          };
+
+          MPC_PLUGIN_ENTRY(CombFilter)
+          SWEEPEOF
+          mkdir -p "$(dirname "src/CombDsp.h")"
+          cat > "src/CombDsp.h" <<'SWEEPEOF'
+          // CombDsp.h - the audio core of Comb Filter (one channel). Uses only the SDK's dsp/ helpers, so it can
+          // be compiled and tested on its own, away from the MPC framework.
+          //
+          // Signal flow (one channel):
+          //
+          //   in -> DC block -> overdrive -> [ comb ] -> normalise -> wet
+          //
+          //   Feedback comb     y[n] = x[n] + g * damp( sat( y[n-D] ) )      resonant, rings at f = fs / D and its multiples
+          //   Feedforward comb  y[n] = x[n] + g * damp( x[n-D] )             notches / peaks, no ringing
+          //
+          //   D = fs / Freq (fractional, linear interpolation).  g is signed:
+          //     g > 0  POSITIVE comb: peaks at   f, 2f, 3f ...           (notches halfway between)
+          //     g < 0  NEGATIVE comb: peaks at   f/2, 3f/2, 5f/2 ...    (odd multiples of f/2: a hollow, octave-down sound)
+          //
+          //   damp() is a one-pole lowpass in the loop (Damping). Its delay is subtracted from D, so the pitch stays on
+          //   Freq as Damping changes. sat() is a tanh limiter in the feedback loop: resonances grow warm, never explode.
+          //   The wet signal is normalised (about unity RMS on noise), so Amount does not change the level much.
+          //
+          // No allocation outside prepare(). No transcendental function per sample except the two fastTanh().
+
+          #ifndef COMB_DSP_H
+          #define COMB_DSP_H
+
+          #include "dsp/delay_line.h"
+          #include "dsp/math.h"
+          #include "dsp/onepole.h"
+
+          #include <algorithm>
+          #include <cmath>
+
+          namespace comb {
+
+          constexpr float kMinFreq  = 40.0f;     // Hz, lowest Freq parameter value
+          constexpr float kMaxFreq  = 8000.0f;   // Hz, highest Freq parameter value
+          constexpr float kMaxSpread = 12.0f;    // semitones between the two channels at Spread = 100 %
+          constexpr float kMaxFeedback = 0.97f;  // loop gain at Amount = 100 % (feedback type)
+
+          // Everything the channel needs for one control block (a few milliseconds), already in DSP units.
+          struct Block
+          {
+              float freq        = 220.0f;   // Hz
+              float amount      = 0.5f;     // 0..1
+              bool  negative    = false;    // polarity
+              bool  feedforward = false;    // type
+              float damping     = 0.0f;     // 0..1 (0 = bright loop, 1 = dark loop)
+              float drive       = 0.0f;     // 0..1
+          };
+
+          inline float dampingCutoff(float damping)   // 0 -> 20 kHz (open), 1 -> 1.5 kHz
+          {
+              return 20000.0f * std::pow(1500.0f / 20000.0f, std::min(1.0f, std::max(0.0f, damping)));
+          }
+
+          class Channel
+          {
+          public:
+              void prepare(double sampleRate)
+              {
+                  sr_ = (float)sampleRate;
+                  // longest delay: Freq at its minimum, detuned down by the full Spread, plus a little headroom
+                  const float lowest = kMinFreq * std::pow(2.0f, -kMaxSpread / 24.0f);
+                  delay_.prepare((int)(sr_ / lowest) + 16);
+                  dc_.prepare(sampleRate, 10.0f);
+                  reset();
+              }
+
+              void reset()
+              {
+                  delay_.reset();
+                  dc_.reset();
+                  damp_.reset();
+                  cur_ = target_ = std::max(2.0f, sr_ / 220.0f);
+                  step_ = 0.0f;
+                  primed_ = false;     // the first block after a reset jumps straight to the set frequency
+              }
+
+              // Called once per control block. `len` is the number of samples until the next call: the delay glides
+              // there, so frequency changes sweep smoothly instead of clicking.
+              void setBlock(const Block& b, int len)
+              {
+                  const float a = std::max(0.02f, std::min(1.0f, 1.0f - std::exp(-6.2831853f * dampingCutoff(b.damping) / sr_)));
+                  damp_.setCoeff(a);
+                  const float loopDelay = (1.0f - a) / a;                       // group delay of the damping filter at low frequencies
+                  const float want = std::max(2.0f, sr_ / std::max(1.0f, b.freq) - loopDelay);
+                  if (!primed_) { cur_ = want; primed_ = true; }
+                  target_ = want;
+                  step_ = len > 0 ? (target_ - cur_) / (float)len : 0.0f;
+
+                  feedforward_ = b.feedforward;
+                  const float sign = b.negative ? -1.0f : 1.0f;
+                  if (b.feedforward)
+                  {
+                      gain_ = sign * std::min(1.0f, std::max(0.0f, b.amount));
+                      norm_ = 1.0f / std::sqrt(1.0f + gain_ * gain_);
+                  }
+                  else
+                  {
+                      gain_ = sign * kMaxFeedback * std::min(1.0f, std::max(0.0f, b.amount));
+                      norm_ = std::sqrt(1.0f - gain_ * gain_);
+                  }
+
+                  const float d = std::min(1.0f, std::max(0.0f, b.drive));
+                  driveGain_ = 1.0f + 24.0f * d;                                // up to about +28 dB into the shaper
+                  driveComp_ = 1.0f / std::sqrt(driveGain_);                    // roughly level-matched
+                  driveBlend_ = std::min(1.0f, d * 10.0f);                      // exactly clean at 0, fully shaped from 10 %
+              }
+
+              float process(float x)
+              {
+                  cur_ += step_;
+
+                  // input: DC block, then overdrive
+                  x = dc_.process(x);
+                  if (driveBlend_ > 0.0f)
+                  {
+                      const float shaped = mpc::dsp::fastTanh(x * driveGain_) * driveComp_;
+                      x += driveBlend_ * (shaped - x);
+                  }
+
+                  // comb: read before write, so a delay of D samples really is D samples
+                  const float tap = damp_.process(delay_.readLinear(cur_));
+                  float y;
+                  if (feedforward_)
+                  {
+                      y = x + gain_ * tap;
+                      delay_.write(x);
+                  }
+                  else
+                  {
+                      y = x + gain_ * mpc::dsp::fastTanh(tap);
+                      delay_.write(y);
+                  }
+                  return mpc::dsp::flushDenormal(y * norm_);
+              }
+
+          private:
+              mpc::dsp::DelayLine delay_;
+              mpc::dsp::OnePoleLP damp_;
+              mpc::dsp::DCBlocker dc_;
+              float sr_ = 44100.0f;
+              float cur_ = 200.0f, target_ = 200.0f, step_ = 0.0f;
+              float gain_ = 0.0f, norm_ = 1.0f;
+              float driveGain_ = 1.0f, driveComp_ = 1.0f, driveBlend_ = 0.0f;
+              bool  feedforward_ = false;
+              bool  primed_ = false;
+          };
+
+          // The stereo detune: the two channels are spread symmetrically around Freq by up to kMaxSpread semitones.
+          inline void spreadFreqs(float freq, float spread01, float& left, float& right)
+          {
+              const float half = std::min(1.0f, std::max(0.0f, spread01)) * kMaxSpread * 0.5f;
+              left  = freq * std::pow(2.0f, -half / 12.0f);
+              right = freq * std::pow(2.0f,  half / 12.0f);
+          }
+
+          } // namespace comb
+
+          #endif // COMB_DSP_H
+          SWEEPEOF
+          mkdir -p "$(dirname "make_silver.py")"
+          cat > "make_silver.py" <<'SWEEPEOF'
+          #!/usr/bin/env python3
+          """Comb Filter - brushed silver skin.
+
+          Draws a brushed-aluminium version of the SDK's UI kit (knobs, faders, blue segment buttons)
+          and a brushed page background, then runs the SDK's own gen_ui.py on ui.json. On top of the
+          plain generator output it
+            * centres every row of controls (and its Q-Link rectangle) on the screen,
+            * paints the gltchsqnz logo (about 1.5 cm) bottom right, with the bold title to its left,
+            * paints the names of the choices (Positive / Negative, Feedback / Feedforward) in black under the
+              segment buttons.
+          The logo, title and button names are pixels in the page background, so they always show.
+
+          The result goes to ./skins/, which build.py copies verbatim into "Plugin Skins/".
+
+          Needs build/params.json first:   python tools/build.py "plugins/Comb Filter" --target native
+          Run from anywhere:               python "plugins/Comb Filter/make_silver.py"
+          Optional preview sheet:          ... make_silver.py --preview preview.png
+
+          Standard library only. Nothing here changes the SDK; the silver theme is registered
+          inside this process only.
+          """
+
+          import base64
+          import math
+          import os
+          import shutil
+          import struct
+          import sys
+          import zlib
+
+          HERE = os.path.dirname(os.path.abspath(__file__))
+          SDK = os.path.dirname(os.path.dirname(HERE))          # plugins/<Name>/ -> SDK root
+          sys.path.insert(0, os.path.join(SDK, "tools"))
+
+          import make_ui_kit as K   # noqa: E402
+          import gen_ui             # noqa: E402
+
+          ACCENT = "ff1d5fd6"       # the lit colour (knob arcs, fader fill). Change it here.
+
+          # Button colours (brushed blue).
+          BTN_OFF = ((70, 120, 215, 255), (36, 78, 170, 255))     # top -> bottom, resting
+          BTN_ON = ((90, 158, 255, 255), (40, 112, 238, 255))     # top -> bottom, selected
+          BTN_EDGE_ON = (205, 228, 255, 255)
+          BTN_EDGE_OFF = (16, 40, 92, 255)
+
+          # Logo and text on the page.
+          LOGO_PLATE = 128          # logo size in screen pixels: about 1.5 cm on the 7" MPC screens (~85 px/cm)
+          LOGO_MARGIN = 26          # gap from the bottom-right corner of the screen
+          TITLE_GAP = 24            # gap between the title and the logo
+          TEXT_BLACK = (14, 15, 17)
+          BLOCK_SHIFT = -20         # nudge the control block up a little to leave room for the logo band
+
+          LOGO = (                  # the gltchsqnz invader, 8 x 7 cells
+              ".#....#.",
+              "..#..#..",
+              ".######.",
+              "##.##.##",
+              "########",
+              ".#....#.",
+              "..#..#..",
+          )
+
+          SILVER_GREYS = {
+              "bg":         "ffc4c7cd",   # page colour
+              "body":       "ffb4b8bf",   # knob / button body
+              "bodyLight":  "fff0f1f4",   # lit edge
+              "bodyDark":   "ff6f737b",   # shaded edge, grooves
+              "track":      "ff7c8089",   # unfilled arc / fader groove
+              "outline":    "ff25272b",
+              "pointer":    "ff1e2023",   # dark pointer on the light knob face
+              "thumb":      "ffd0d3d8",
+              "thumbLight": "fff4f5f7",
+              "thumbDark":  "ff9a9ea6",
+              "ledOff":     "ff9a9ea6",
+              "textOn":     "ff111214",
+          }
+
+          # Pre-rendered bold text (Poppins Bold, SIL OFL), 8-bit alpha, zlib + base64.
+          # key: (width, height, baseline row, data). Generated by a one-off helper; see make_silver.py.
+          TEXT_MASKS = {
+              "title": (183, 25, 25,
+                  "eNq1l3lsFGUUwN8cuyVoSrcoERSkigcKtvEIKmpbUAQjUQnxALUq4G3UqAlibLetcmgEUZvyjxEBDyh4JXgV"
+                  "Cg3RtmzRCCoIFotngHYrYNvd+eab53vf7OzM1kJWjF/SzuzMe+/7fe97xzcAqaHRgP9xaBkDdJj7u/juerr+"
+                  "h6GbeuByvGBQVFJSXDIasli+AXcgOthNwuYVrDWUtXQeWTtPZ9icQYPCfH/8LtehCWmsJaZ/DjOSF/FGXiTX"
+                  "gM+kwCQ+DZBvsdaDYP7L6WiWi5/btLfj4J7Pnx0D/U6aJfYGaSXlin4sGHBlvDPujc54cxjew4SdwIcBIh3S"
+                  "TsrZEIKChoaNGxqKsgscA877AL0hVg4/bm4dGtAWuKpf7AkYHLtDUCzouneIBpE4OgLnQBgK1btrsgIw4JYj"
+                  "pGcLIWyaFH8vSavppmnohml4cWOYNAyKRvU0JcL3eia2SW8DamqSUsd2HIdnEcISO+hl8VubXykgJQ87xywi"
+                  "AMueaOakADQzMJP6SUPj+TWiJh+jdHihtkO33ePcXdKMYBgFnZq6ar6IyggPW9f7SCpslAFvtxt+HnvYGgyn"
+                  "LJV4kffmWPNrZ3WTKJncu/nLDk5uG/fmMgW9HT5r2Scb6iqLXT0NyqLl5dHpMPi+lfUfPH+pEjln3roNq+ee"
+                  "D6oOuNjvQM70ZZ99+upUzZ9OYZNnZpVOLOUxToeCqqrK6sp0kNwHZ0drkAGWl1eWkTkyOKSsZv3GddUlan7S"
+                  "iFZURCuGQeTeNbMpNcjXuGPyAICTH++Rluil9DZJKnfxnynftFzr6rXyj1Wlv7hP38oDc0GvurVeDqlSrLCX"
+                  "jWp1BZoK0/72sM/w1zFJyRRBCvt+uM7fjFbePmPegdTPL68keU+joKQdcclFwiHq7fnuRk9Wb7rzSKhgBwWN"
+                  "sCwhaCueoQc61IuEJXZ2Y8KiILRxS95qdJJ87+AaTdcUtsQtbWglBQv8Oc7j9rCLzLDKD8OAEpEk22N87Kut"
+                  "pFsVeq3PwdAHrqf5rUQiSfPLu8HT6HqiB3vt+S9RVEhxCYQJWgvBPS8sWLToxdM0Y9BOtCiHOODRtsmqoajU"
+                  "Nrr/bPweeSIScpI4G0xPAIXSosu+SKrzetij+0bNWB97ku/tRtrudzDpuOlAyYylVGhUepCLRNKe34rSxs1e"
+                  "FPqbWoMWs/349V8kLO2eMzXTpZKY2L5LmZP08/DXbSqX5XcmpZASIK2ft3XyxcLqVBPxKMdH8qnZDOwXuzTu"
+                  "BuWRjq6PAG5Q8/9WW/2x8sHOAemsZs8s6WSdas0M1jjy28iEJF/vvyFHG7GKpAXW0HKZSmL92XqoeB97QuCK"
+                  "U/WcaV28KfI8cNflyL/uOkEbsoBX6/w60O303pyH4l3xg/Ea3vI+2HNgYORyVUmm5g0+UYdGh+Jt6zDSnUGV"
+                  "08Zp4JognV8aG+ao2R/o01lNeEgVxcnAm7yFnOm0D9CYynE6BvNhYApT4U6NBR7hOMKp6XXNVHWlhpeAl7v7"
+                  "GCyADr7ZL3YIRivsq1hhRC/dJk9XNG+iEM4bLrbj9Mw6kZ4dBXu5Q5mwHai4h+FWruc2hWUDR/l6LjPGCfsp"
+                  "I/BlmsswRgkKP5zhYkvcxVqmfgalBtOY2WKHtQsU9gRqKxTo9PZwdWU0WlW1ieO4GajR8rbP5zOUFu8vSOig"
+                  "w6Vstabq3oW0RuUEt5vQQw1Cuxk7SnoaDD3C2Le72DbWsYM1GNDOEvMysY8VJGEYq7BLCQJud5M7deIQSfFt"
+                  "WGFLHG+wxa/6TUmoV43DxS5U1krAP3KksYGxTwliC3xbU9g5bSzxTAD7mCnZB7ssiM3jtxBjk8YFCnJJZgG8"
+                  "e9H8hQtfGAl1vN1NvBpTv46DxCnKDltii+pNxtBupnkwE/voBdDHnqDRXkzlOTurojQqy8vLny2fraewxyrs"
+                  "S2z2/DcZ7abnJKggS05iNIQpYN5lEwdys8N22Achis65Kj2vDqQku0oz3K+oY2CP5w5wLufzoVDGka80gA0f"
+                  "Bpr7Y25zn0erUXHUchoJPKkyoY6yLxtsEv6Bjihwcy9X0Hh+oAD6cx4Fm1ltfIr33djhUPDWsuhdbbvbdu+7"
+                  "CTJMaOf0SHWUaksfpX7KpVTdRKgOHlxVu41LpSAfhLPDJlvd615rZFMCX08lTTbYIXVHet+0LgN4mNqNxLXT"
+                  "Jy1UHz9H6MwVNGFQfcs8uPZcxok+plftgmqG1LuXppp7Ftip7k9HHUm9Vc8am0Kj3rHcsxMY4ZjbphmAvoJm"
+                  "uc3dN2HAbd3cnaXNf4j7J7rHvZuIWkr6duCHdQaflDbyN9dKF3uXFElZ4WIfkrYlZ5JhErDlHovPWrwSvNOr"
+                  "UEQpyZIMYqcepD/KTF4KgyREPdkt+Il4+cuF51+qSmaGCQPOf094daZ3xeleEl3W7D3smAvqXPoF/1jjYv/M"
+                  "988r7KGqVpURthJ4fdrhlNrM9IHbgInqUaGP7T2AfHX4fUAdlmf+oZ5+wY341LXe/AceoXrRjwm4dPG2uLQP"
+                  "Ni8oAt9B5oz391mys6l8pOrxOtTGmptjVXRDXXBdrKU5dq9awuDG2Nbm2BQKTiXwHBS+0S6sPUvP9D8TdLg4"
+                  "1rI1Fhvlzek/gNyNrH6ju8fDHl3T1BKrpTsSnPx2W0J2ba0YwT8yTfwNzFONsg=="),
+              "POSITIVE": (72, 15, 14,
+                  "eNp1VGlIFVEU/u6899TAQMkWC8qSStFCsiDNJUtafkQrFEVh+yIWKDwqKI22+RFRUApllD+kBYqKIIiywh8t"
+                  "tiBtLyiTCqTC6lVa783M/Toz70UQdgbunHPvme+c75xzB/DEMNCXGGrEQ/tMkooZCPZ0zYSvT8+prhRlAKqv"
+                  "Uz928BeL0D87e5SB5F7y5n9w6EnvlUwJB8MvEsvMU5WBKWE+HWzM0PpFkt/XTG5GouzHHFxEn18esR3H8ZBe"
+                  "pSgVj+TzOMR5oV+uvPPJ5649Zui/xP+8NPWqsrWfotyEBGRU1ddXZciugexg/eENacCobdWVRukpW3/YVaEq"
+                  "aoJ5xvbaukwhPLWutkKKUVh37MAiP5SmkwmYdBqBLd/dzL5tFq91v1z1TT5mk5+xn5ZYj/CYrEQ7uVdi3iYP"
+                  "qsRGj8z9DMnHGQ6coHMMy2UnEpFlKUZGGD7dSr7zlVpWSIpt0ZYS37CstaiwrXsK6WGrZwwOuBXpIduShNfR"
+                  "nU2RKOcZnY6+kJ1zSTtvVBntduDItdaBheTLQHql5FaQhRZyDdK/MJKFZdStGNbrfMxH6h2byxiXi2q8ZngA"
+                  "MDBMZqVFaD05VC5VLCNDiSiI1VlwVgNnNatwhrLMp/OqZmfwum0fF4juj10PggmYrhlymx2iLseiThf87UKU"
+                  "uzhK1pf9AnGcueTlQBe/D8dKbcfTuCD1KUhJdTuXF8tn0Dfq8UCgdN/DKH+mFHn5TNN/8zGS37NzCfUlYA71"
+                  "3fziiYUlxTmCM9adGaWSOhx9Piv3itYd/vV3b+8G2m1OlMkJJaCEunvW2BhOIhr487XmEiC9x+6ejJyr11sn"
+                  "WHY0xxtAH1a4/bK8fpXIeu3cD+q0Qtt+FsAwi1HeQottrxKcUjGsTykyHqb4vZZP2pNFGRebSgPVX12q3RvF"
+                  "YekHV/2xCbPI93IPguLchjZyIwIq0CFnTcLB8Dd4t6FlCExz/2D8uc+jtzadrBnpzfOI6sam2lyoTNOsce3J"
+                  "W811WG+ak9xfwwJzj5mnvOjFZnPDYgPqN8700Js="),
+              "NEGATIVE": (83, 20, 14,
+                  "eNqtVF1sFFUYPXd2dreBJtIETbcNiqj8VQuhfaAE2qU24gNKakzEoAFaqsZqIS5W/IEdH0yJKSK8FKo2SIgR"
+                  "gxjxwQebmobEKrzwUGWrJaBR6RYbSprdsjsz9/jN7G7bkBqj4T7MnPvznXvu9wf8nxHAhqupdhizbkaj0TlK"
+                  "ASuj0QjUv3IpzFm2bJEK4FsyXTy7AckemAYGyBdgQplmwMxdbnhI5uZMHDAatL5YFMRO8kQgFDSVv2sGPOly"
+                  "KCBz18nyEYTQ67pNyJPBOzDzUcaMF1eRP3lqyxbfIs4o/EhXX5obQB/ZLMwlzYeOvLpE1g2UxY7uXzHfsl4S"
+                  "vxRwm6o75ujk29tR3x57PPCGZd0nT4ta8W1yyRqru/NJeag83OFB5Cix/orMOfmanKsf9dBJciSEhwt4DB20"
+                  "BV9AJ/kFLpDviI5+8j0V/tAz5bmFojKbcd213nILFo2Tycuy8bSKXBPbCfKm/aNx5xROYK9Ah/2wbPs4tjr2"
+                  "DwqRG3ZqsXcHh1Pk+SLN8X1aD6pe8nm8T/cosNV2BxFjNt288Imky2G8MoWHgpFW8vLq5bDI4yi9zsxSbKE+"
+                  "i/K0O1qFkgGHWzRZLpJjp8gdOK911+tvxtPuzTs+0Z47vMD+glNTOBFGjR8ej/Jj4KTmy/iU8mmkOxzb197r"
+                  "OB8I5QPzrrk3/tBsQoIuc2PBV+S20NxQHfkzvpnCibBqIIeKwnnKTeSZ4FVO3I3t2smbntZ0V+BZoXJE5TnN"
+                  "lpq11bW19cHPNA+LmDZP5TQWlfV6WqVR/DuvbKb+EniM+vuqddVratdVCGWFwhnajvjyIN0eA3v7+g57/pts"
+                  "yftyZw6PuEyEUEs99ujSHGUYXZy8pLkZiKScsdWo+Lr37KqsnVkOtWDcTtvNuPc6+edvIv4ZVZrMRdnhkDE/"
+                  "WYj4YBDlWWZyEe+R/KnTGZ0dnSdJt5/Uw1nJr2Kxr5St5+T/IlDnZRAnWuVIw5ig1DHbUxYdEZyWMIxIAe4p"
+                  "5OXnMFXwV5mdQEAZZrfvyf5SxK34XTAUdlnWKiEqaTp0ZPf9fnGFdnzUubKavCi7kVh3R6VfSVIl1bukWNZb"
+                  "ViOUgY3xt+IPKb8Ya+LdBxqNW1tJocYNPBjfs9FPHD0AZWDWgp/VVkG6i08rf28t34n87sADG9r+yrLDb1DT"
+                  "XSnXePLdR9qPOdVs8p3oH6/syqdZskwZuB1DGcF3vfjo7ypxexj9cc9Tu1uj+O+MfwONfUQn"),
+              "FEEDBACK": (90, 14, 14,
+                  "eNp1k39olVUYx59z7vvezdkf3g2dtqjlSmVrWLubXIwtN6+LkhJ1JBHBWmAUuJBh9IebV+9od+1mJqtbF2tJ"
+                  "3iAhoYjsx1pi2dRGgURBbIr+M70uC9yPvO95z7fnnHtnEXjuH/f7vDznc57nOd/T2mrWhtZSEnSrJSh0DaqW"
+                  "TgDPkkO3Xg7FgMMUsAEKq4UCIuDwL59jpT1LOI4b+JcsiwOOtCmSU4R07A67Vd4kBxzHEVprS46Sm2dKw5MF"
+                  "TYVOSv8skLfPf59PuRnbs/LkPEnD72iJtjQvEiQ2DaTjTfmktbF0ss0hIai4/a2DGxdMFcjb7tyb3r2CUZLq"
+                  "4umXFzfEYpu5+wVP7k93hxlpydQS2/3KPUy+Iw+r+M4Wf6RISveQlWcqSVSMGfXRFfiG7B+9zNHMU9x3l2L1"
+                  "+zDwMVHNOZOkB4QhH6EV14FPFjL5wbLFIUe6P/CWcU4YJHqV/8ZngJ+K6GvcwCzvgjZkD7jOOlcr1sMHpoFZ"
+                  "b4hCE/xtBgo7KQ4M0Rj0CWFu8Nrl7PdBegzqdBmtzqrcsrI5Pxum0KjCoysZlqyKnIG2ZDXTUbkl6yFFn2s1"
+                  "Eb17l+chQ53wsg9XvQc9KbqBg1z3xaUk887IFtFr2v9qV0/XeeVHm+CPd/W8NOypPU9rnOVJPaC0nQbe4GAH"
+                  "9Gn3ErCJ9THT/TGNON9fuG6N6IF/KedP1fPsuc3B7j0vuPQucgUDbnlcq4J8vZO7CxS7i+a90R5cGHwIOFd6"
+                  "FXpVsMTlGj+gb4Fn3GJ7WXuZ4mMfBa03KqzHk1qn1jSFGxubSx/hosKN9Wub1i1/XmPsvzUf4GAn9Kh7Edj8"
+                  "v5ob6iOm5t+m/St1tmZ/tRNku2+EGiunrSPDx4uWzKo/IlRzfPjUvdVcw/6qyNn5OU93VLZNeXiTPtPqwobC"
+                  "nF80c14+BEwy2fZ5oZykp3LVxunSPcV3PcETeFtQgv8m2Ae/lNCXjJ4DPOXdRyPqb+sH5KpFsxkW22dOvU+h"
+                  "86xn2R87aJ9SQ3QSOCmNN2otmW4fMckqJaV0Ur7R3/ANLxs16kM23v30I9t0kqO/nuDpdfIp+PUL4Cj7+WeT"
+                  "dCMuqI/9Le66Cnx6WyLRV26fML/BtsFMcl3+2TQmMqlt0r7B7YcPbRXdib6l9Fyif2XVQKZ3lX2DDclMbEmk"
+                  "P2GOKWl/J9NrDBFNcEzr+3sP1PwDKndTQA=="),
+              "FEEDFORWARD": (116, 15, 14,
+                  "eNqdVWtsFVUQ/s7uvddSqFALITx6rSFKaAs14SGxEF7tVqwGA9YXBmxpUYyJKAZEWwEfEER8BBIVjAiIgkAa"
+                  "tDEG0uVRBcQgBFBAoNVAoPQB5WV7e3fP5+zupfCDH8RJTnbON2fnmzk7MwvcjoTHWPldoJKX1rmFMPG/RaGf"
+                  "ZeVUVFSUl5e/WZ4he/irw3yTmnqNzIaxkeREn1PdhvtbYCG8S25hQgpgGiEFb/lGw18ihinaXc06PlANZ1wf"
+                  "HqoM71BgNQxDtpCl/I1gvq5MQ15URmAzlB+mYBFzntYb4/F4c0NDfcMIhD0fQYAqoRrBA0i5SCcHz2h92HN6"
+                  "wxqIcas8jVukLdgCcpOmm9u9R1qqhH3PBz8ftOd2hVLo8tq2g7s/6S+hI/vLA/vei56nTn/yqMPz2/IU7l5U"
+                  "c6hmYRQhLLXtEcO2znjftrOhPrXtWcBE2y6CMWP7warRRbb9Bgbb9srkhTXiVrAfRs0OOPsGcYxq9i/5j6hS"
+                  "vQ746uUCYMQVT/vzItljPuOilqGgybc2jQP2kj9e4CsfkjPQ2yGPGPiKHInvvAPOMXIzxpNnq3ktVa33sPgh"
+                  "7XHqkrF5w02Vepbcv+4fl1sVtlCfXvebuE0LnRCi3095x3uXXXB49e/C1Bby0r7Lms29Ue20iWVOruusQKGO"
+                  "OVfTsdepwxTGeFbeb3XWIM9p16Q2nk1gcW4KKqg2ghLqSqBzrcN7o9qtTQEqXU4eRidWhJTVdN2B5kvkjmQ1"
+                  "l87J/hggB8uxi07b8uezUi/xV7zNdocPhy/wG+xx3a09MFpi/Br5wnLg1cnYlcDcmziXa+evnXvsy+Qj+XQb"
+                  "q/fsrCMXl2n+JM0RbaM7CNPIauB7zdnohNepq7CDXO59mO1sTKpi1XFW3EdOQQP5ICL4nD6neyVdkjnXgXl3"
+                  "Wzxm3AMhfMG497kaz5wreEw7ntpy+lzFy5prVFJYEnEGYTppK2wjS8JdQn4AwllsJkXwFp28E3xqPSunsC0j"
+                  "0kydGe5szg84edwImd2aOjCvhjIk0hAWaC5BJCknZ8gdo8ndRlhl3j84bSp1bSdggnYlzzLhBFa54glYT70K"
+                  "O8lShEzkkqv/1T1n82Ql96vQcc2ZcuSXBOexkBDcwDzOQWbYNDGUTv2krGUtl04mJdfr2JzMF5sutg7o5bRz"
+                  "19MzG6k7OAsZc5c9vlLHON7LcxpkQnQ+w2s8hTzGW/kR5ALbW+c9sZntCU5TcrqOSQ252skKen9FYiJNg9Rd"
+                  "IKsUPqbraTEtd1uqdbUwbEhY1wDVWpeIPxMbdZu7Fj1bdJyPQvXzG4xuu16LfK2PmjA7sLj2Jmg2/JFlLmqU"
+                  "TV2xNwieqxW1ebEpY25ZK1k/S1oyBy+QNfJ2ZInXoOffkcupIacLZ8i7AhZD6phXu0sII49Ie3z7GbkBBVKh"
+                  "pje8PIwbBNti+T+MYD5FJ5UVdguSvvOh0qKMAM2aOjmKsVZ+Cvpa1hB/iqVPnD6hl6cNsaw+8lDoauVbXYFM"
+                  "yxruz7jkwtIx6GNZA5FmWbnqOjbWw3L+A8G38/o="),
+          }
+
+
+          # --------------------------------------------------------------------------------------------
+          # Brushed-metal noise (deterministic: same skin on every build)
+          # --------------------------------------------------------------------------------------------
+          def h01(n):
+              """Integer hash -> 0..1."""
+              n = (int(n) * 0x9E3779B1) & 0xFFFFFFFF
+              n ^= n >> 15
+              n = (n * 0x85EBCA77) & 0xFFFFFFFF
+              n ^= n >> 13
+              return (n & 0xFFFF) / 65535.0
+
+
+          def streak(x, y, seed):
+              """About -1.2 .. +1.2: long thin horizontal brush lines, broken into short runs."""
+              row = h01(int(y) * 977 + seed)
+              run = h01(int(y) * 131 + (int(x) // 41) * 7919 + seed + 5)
+              fine = h01(int(x) * 31 + int(y) * 1009 + seed + 11)
+              return (row - 0.5) * 1.2 + (run - 0.5) * 0.9 + (fine - 0.5) * 0.25
+
+
+          def clamp8(v):
+              return max(0, min(255, int(round(v))))
+
+
+          def shade(c, d):
+              return (clamp8(c[0] + d), clamp8(c[1] + d), clamp8(c[2] + d), c[3])
+
+
+          def brushed(y0, y1, c0, c1, seed, amp=7.0):
+              """Vertical gradient c0 -> c1 with horizontal brushing on top."""
+              base = K.vgrad(y0, y1, c0, c1)
+              return lambda px, py: shade(base(px, py), streak(px, py, seed) * amp)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Drawing overrides (same geometry as the SDK kit, silver surfaces)
+          # --------------------------------------------------------------------------------------------
+          def turned(cx, cy, radius, seed=3):
+              """Turned-aluminium knob face: concentric brush lines and a two-lobed highlight."""
+              light = -0.75 * math.pi
+
+              def f(px, py):
+                  dx, dy = px - cx, py - cy
+                  rad = math.hypot(dx, dy)
+                  lobes = math.cos(2.0 * (math.atan2(dy, dx) - light))
+                  ring = h01(int(rad * 2.4) + seed * 101) - 0.5
+                  fine = h01(int(px * 13) + int(py * 29) * 7 + seed) - 0.5
+                  lum = 188 + 30 * lobes * (0.35 + 0.65 * min(1.0, rad / radius)) + ring * 16 + fine * 4
+                  return (clamp8(lum), clamp8(lum + 1), clamp8(lum + 4), 255)   # a touch cool
+              return f
+
+
+          def knob_static(size, th):
+              c = K.Canvas(size, size)
+              cx = cy = size / 2.0
+              r = size / 2.0
+              ring_out, ring_in = r - 1.0, r - max(4.0, size * 0.1)
+              body_r = ring_in - max(3.0, size * 0.07)
+              K.arc(c, cx, cy, ring_in, ring_out, -K.SWEEP / 2.0, K.SWEEP / 2.0, th["track"])
+              K.circle(c, cx, cy + 1.5, body_r + 1.0, K.with_alpha(th["outline"], 150))
+              K.circle(c, cx, cy, body_r, K.light_rim(cx, cy, th["bodyLight"], th["bodyDark"]))
+              face_r = body_r - max(1.5, size * 0.035)
+              K.circle(c, cx, cy, face_r, turned(cx, cy, face_r))
+              return c, (cx, cy, ring_in, ring_out, body_r, face_r)
+
+
+          def fader_cap(g, th):
+              w, h = g["cap_len"], g["cap_th"]
+              c = K.Canvas(w + 2, h + 4)
+              K.rrect(c, 1, 3, w, h, 5.0, K.with_alpha(th["outline"], 170))
+              K.rrect(c, 1, 1, w, h, 5.0, brushed(1, 1 + h, th["thumbLight"], th["thumbDark"], 23, 6.0))
+              K.rrect_outline(c, 1, 1, w, h, 5.0, 1.0, K.with_alpha(th["outline"], 180))
+              cx = 1 + w / 2.0
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 2.0, th["accentDark"])
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 1.4, th["accent"])
+              return c
+
+
+          def render_button(th, on, w=120, h=44, led=True):
+              """Blue brushed key: deep blue at rest, bright lit blue when selected."""
+              c = K.Canvas(w, h)
+              rad = 8.0
+              K.rrect(c, 1, 3, w - 2, h - 4, rad, K.with_alpha(th["outline"], 150))
+              top, bottom = BTN_ON if on else BTN_OFF
+              K.rrect(c, 1, 1, w - 2, h - 4, rad, brushed(1, h - 3, top, bottom, 17, 6.0))
+              K.rrect_outline(c, 1, 1, w - 2, h - 4, rad, 2.0 if on else 1.0, BTN_EDGE_ON if on else BTN_EDGE_OFF)
+              if on and not led:
+                  K.rrect(c, 10, h - 9, w - 20, 3, 1.5, BTN_EDGE_ON)
+              if led:
+                  lx, ly, lw, lh = 11, (h - 4) / 2.0 + 1 - 9, 6, 18
+                  if on:
+                      K.rrect(c, lx - 3, ly - 3, lw + 6, lh + 6, 6.0, th["accentGlow"])
+                  K.rrect(c, lx, ly, lw, lh, 3.0, BTN_EDGE_ON if on else th["ledOff"])
+              return c.rows(), w
+
+
+          # --------------------------------------------------------------------------------------------
+          # Layout: centre every row of controls (and its Q-Link rectangle); centre the block vertically
+          # --------------------------------------------------------------------------------------------
+          GRID_GAP = gen_ui.SLOT_X[1] - gen_ui.SLOT_X[0] - gen_ui.SLOT_W      # the grid's normal gap (42 px)
+
+
+          def row_x(page, row):
+              """{column: x} of the occupied slots in a grid row, packed with the normal gap and centred."""
+              cols = [c for c in range(4)
+                      if row * 4 + c < len(page.controls) and page.controls[row * 4 + c].widget != "empty"]
+              total = len(cols) * gen_ui.SLOT_W + max(0, len(cols) - 1) * GRID_GAP
+              x0 = (gen_ui.SCREEN_W - total) // 2
+              return {c: x0 + j * (gen_ui.SLOT_W + GRID_GAP) for j, c in enumerate(cols)}
+
+
+          SEG_Y = 46          # top of the segment buttons inside their slot (the SDK uses 54); leaves room for the names below
+
+
+          def radio_component(style, overlay_name, n):
+              """gen_ui.radio_component with the segment buttons raised to SEG_Y so their names fit inside the slot."""
+              width, xs = gen_ui.SEGMENTS[n]
+              children = [gen_ui.focus_child(style),
+                          gen_ui.entry("name", "Label", gen_ui.label_data("Name", style["muted"], 24.0), "15 8 248 34",
+                                       "No", "Show", "Always")]
+              for i, x in enumerate(xs):
+                  children.append(gen_ui.entry("seg %d" % i, "Button",
+                                               gen_ui.button_data("seg%d_on.png" % n, "seg%d_off.png" % n, i, n),
+                                               "%d %d %d 40" % (x, SEG_Y, width), "No", "Show", "Always"))
+              return gen_ui.component_definition(gen_ui.control_actions(overlay_name, double_click=False), children,
+                                                 "00000000")
+
+
+          def tab_component(page, style):
+              """gen_ui.tab_component with centred rows and without the on-button caption labels
+              (the button names are painted under the buttons in the page background instead)."""
+              children = []
+              for i, ctl in enumerate(page.controls):
+                  row, col = divmod(i, 4)
+                  if ctl.widget == "empty":
+                      continue
+                  bounds = "%d %d %d %d" % (row_x(page, row)[col], gen_ui.SLOT_Y[row], gen_ui.SLOT_W, gen_ui.SLOT_H)
+                  invalidating = None
+                  if ctl.visible:
+                      vp, idx = ctl.visible
+                      invalidating = ["IndexedEnabling/%d/%d/%s" % (idx, len(vp.choices), vp.handle)]
+                  if ctl.widget == "text":
+                      children.append(gen_ui.entry("text %d" % i, "Label",
+                                                   gen_ui.label_data("Text", style["text"], 30.0, "left", ctl.text),
+                                                   bounds, "No", "Show", "Always", invalidating=invalidating))
+                      continue
+                  children.append(gen_ui.entry(ctl.param.name, ctl.definition,
+                                               gen_ui.obj(("version", 1), ("handleName", "Data")), bounds,
+                                               "Yes", "Hide", "Always", remap=[("Data", ctl.param.handle)],
+                                               invalidating=invalidating))
+              return gen_ui.component_definition([], children, style["background"], bg_image=page.background)
+
+
+          _orig_qlink_rects = gen_ui.qlink_rects
+
+
+          def qlink_rects(page, groups="columns"):
+              """Q-Link rectangles around each (centred) row of controls."""
+              if groups != "rows":
+                  return _orig_qlink_rects(page, groups)
+              pad, out = gen_ui.QLINK_PAD, []
+              for r in range(4):
+                  xs = row_x(page, r)
+                  cs = [c for c in xs if page.controls[r * 4 + c].param is not None]
+                  if not cs:
+                      continue
+                  x = max(xs[min(cs)] - pad, 2)
+                  y = max(gen_ui.SLOT_Y[r] - pad, 2)
+                  x2 = min(xs[max(cs)] + gen_ui.SLOT_W + pad, gen_ui.SCREEN_W - 2)
+                  y2 = min(gen_ui.SLOT_Y[r] + gen_ui.SLOT_H + pad, gen_ui.SCREEN_H - 2)
+                  out.append("%d %d %d %d" % (x, y, x2 - x, y2 - y))
+              return out
+
+
+          def centre_vertically(page):
+              """Shift the grid rows so the rows in use sit in the middle of the 628 px tab."""
+              used = max(i // 4 for i, c in enumerate(page.controls) if c.widget != "empty") + 1
+              block = (gen_ui.SLOT_Y[used - 1] + gen_ui.SLOT_H) - gen_ui.SLOT_Y[0]
+              dy = (gen_ui.SCREEN_H - block) // 2 - gen_ui.SLOT_Y[0] + BLOCK_SHIFT
+              gen_ui.SLOT_Y = [y + dy for y in gen_ui.SLOT_Y]
+
+
+          def caption_spots(page):
+              """[(text, centre x, baseline y)] for the names under every segmented choice switch."""
+              spots = []
+              for i, ctl in enumerate(page.controls):
+                  if ctl.widget == "empty" or not ctl.definition.startswith("radio"):
+                      continue
+                  row, col = divmod(i, 4)
+                  width, xs = gen_ui.SEGMENTS[len(ctl.param.choices)]
+                  for choice, x in zip(ctl.param.choices, xs):
+                      spots.append((choice, row_x(page, row)[col] + x + width / 2.0, gen_ui.SLOT_Y[row] + SEG_Y + 56))
+              return spots
+
+
+          # --------------------------------------------------------------------------------------------
+          # Page background: brushed aluminium, 1280 x 628 (the tab area, drawn 1:1), logo, title, captions
+          # --------------------------------------------------------------------------------------------
+          def write_png_rgba(path, width, rows):
+              def chunk(tag, data):
+                  body = tag + data
+                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+              raw = b"".join(b"\0" + bytes(r) for r in rows)
+              png = b"\x89PNG\r\n\x1a\n"
+              png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, len(rows), 8, 6, 0, 0, 0))
+              png += chunk(b"IDAT", zlib.compress(raw, 9))
+              png += chunk(b"IEND", b"")
+              with open(path, "wb") as f:
+                  f.write(png)
+
+
+          def draw_logo():
+              """The invader on a black plate (a canvas with room for the drop shadow), LOGO_PLATE px square.
+              Cell geometry is measured from the supplied 512 px logo and scaled."""
+              s = LOGO_PLATE / 512.0
+              pad, size = 6, LOGO_PLATE
+              c = K.Canvas(size + 2 * pad, size + 2 * pad)
+              rad = size * 0.11
+              K.rrect(c, pad, pad + 3, size, size, rad, (0, 0, 0, 110))
+              K.rrect(c, pad, pad, size, size, rad, K.vgrad(pad, pad + size, (24, 25, 28, 255), (2, 2, 3, 255)))
+              K.rrect_outline(c, pad, pad, size, size, rad, 1.0, (112, 116, 124, 255))
+              for r, line in enumerate(LOGO):
+                  for col, ch in enumerate(line):
+                      if ch == "#":
+                          K.rrect(c, pad + (85 + 43.57 * col) * s, pad + (99 + 43.0 * r) * s, 37 * s, 37 * s, 1.0,
+                                  (248, 250, 253, 255))
+              return c, pad
+
+
+          def blend_canvas(rows, canvas, x0, y0):
+              for y in range(canvas.h):
+                  row = rows[y0 + y]
+                  for x in range(canvas.w):
+                      r, g, b, a = canvas.px[y * canvas.w + x]
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + x) * 4
+                      row[i] = clamp8(row[i] + (r - row[i]) * a)
+                      row[i + 1] = clamp8(row[i + 1] + (g - row[i + 1]) * a)
+                      row[i + 2] = clamp8(row[i + 2] + (b - row[i + 2]) * a)
+
+
+          def text_size(name):
+              w, h, baseline, _ = TEXT_MASKS[name]
+              return w, h, baseline
+
+
+          def blend_text(rows, name, x0, y0, colour):
+              w, h, _baseline, packed = TEXT_MASKS[name]
+              alpha = zlib.decompress(base64.b64decode(packed))
+              for yy in range(h):
+                  row = rows[y0 + yy]
+                  for xx in range(w):
+                      a = alpha[yy * w + xx] / 255.0
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + xx) * 4
+                      for k in range(3):
+                          row[i + k] = clamp8(row[i + k] + (colour[k] - row[i + k]) * a)
+
+
+          def make_background(path, page, w=1280, h=628, seed=41):
+              base = K.parse_argb(SILVER_GREYS["bg"])
+              amp = 7.0
+              sheen = [7 * math.sin(x / 190.0 + 0.6) + 4 * math.sin(x / 53.0) + 5 * math.sin(x / 611.0) for x in range(w)]
+              runs = w // 41 + 2
+              rows = []
+              for y in range(h):
+                  fall = -((y / float(h)) - 0.5) * 8.0                  # slightly lighter at the top
+                  row_n = (h01(y * 977 + seed) - 0.5) * 1.2 * amp
+                  run_n = [(h01(y * 131 + k * 7919 + seed + 5) - 0.5) * 0.9 * amp for k in range(runs)]
+                  row = bytearray(w * 4)
+                  for x in range(w):
+                      fine = (h01(x * 31 + y * 1009 + seed + 11) - 0.5) * 0.25 * amp
+                      d = sheen[x] + fall + row_n + run_n[x // 41] + fine
+                      i = x * 4
+                      row[i] = clamp8(base[0] + d)
+                      row[i + 1] = clamp8(base[1] + d)
+                      row[i + 2] = clamp8(base[2] + d * 1.05)
+                      row[i + 3] = 255
+                  rows.append(row)
+
+              # logo, bottom right
+              logo, pad = draw_logo()
+              plate_x = w - LOGO_MARGIN - LOGO_PLATE
+              plate_y = h - LOGO_MARGIN - LOGO_PLATE
+              blend_canvas(rows, logo, plate_x - pad, plate_y - pad)
+              # title, to the left of the logo, its baseline level with the bottom of the invader artwork
+              # (its last row of cells, measured on the 512 px logo and scaled), not the edge of the plate
+              tw, th, tb = text_size("title")
+              art_bottom = plate_y + int(round((99 + 43.0 * (len(LOGO) - 1) + 37) * LOGO_PLATE / 512.0))
+              blend_text(rows, "title", plate_x - TITLE_GAP - tw, art_bottom - tb, TEXT_BLACK)
+              # names under the segment buttons
+              for text, cx, baseline_y in caption_spots(page):
+                  key = text.upper()
+                  if key not in TEXT_MASKS:
+                      print('make_silver: no pre-rendered text for "%s"; that button name is not drawn.' % text)
+                      continue
+                  cw, _, cb = text_size(key)
+                  blend_text(rows, key, int(round(cx - cw / 2.0)), int(baseline_y) - cb, TEXT_BLACK)
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          def install_theme():
+              gen_ui.tab_component = tab_component
+              gen_ui.radio_component = radio_component
+              gen_ui.qlink_rects = qlink_rects
+              K.GREYS.update(SILVER_GREYS)
+              K.THEMES["silver"] = ACCENT
+              K.knob_static = knob_static
+              K.fader_cap = fader_cap
+              K.render_button = render_button
+
+
+          def main(argv):
+              install_theme()
+              if len(argv) >= 3 and argv[1] == "--preview":
+                  K.render_preview(argv[2], K.make_theme("silver"))
+                  return 0
+              params = os.path.join(HERE, "build", "params.json")
+              ui = os.path.join(HERE, "ui.json")
+              out = os.path.join(HERE, "skins")
+              if not os.path.isfile(params):
+                  print("make_silver: build/params.json is missing. Run first:\n"
+                        '  python tools/build.py "plugins/Comb Filter" --target native')
+                  return 1
+              if os.path.isdir(out):
+                  shutil.rmtree(out)
+              os.makedirs(out)
+              pages = gen_ui.load_ui(ui, gen_ui.ParamTable(gen_ui.load_params(params)))[0]
+              centre_vertically(pages[0])
+              make_background(os.path.join(out, "silver_bg.png"), pages[0])
+              gen_ui.generate(params, ui, out, assets_dir=out, quiet=False, kit_cache=None)
+              print("make_silver: wrote %s (%d files)" % (out, len(os.listdir(out))))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          SWEEPEOF
+      - name: First build (native) to list the parameters
+        run: python tools/build.py "plugins/Comb Filter" --target native
+      - name: Draw the brushed silver skin
+        run: python "plugins/Comb Filter/make_silver.py"
+      - name: Build, validate, make MPC folder
+        run: python tools/build.py "plugins/Comb Filter"
+      - name: Upload MPC plugin folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Comb-Filter-MPC
+          path: plugins/Comb Filter/build/*VST*
+          if-no-files-found: error
