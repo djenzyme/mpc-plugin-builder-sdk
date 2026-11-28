@@ -1,0 +1,2108 @@
+name: Build Analysis Meter
+
+# One-file setup: this workflow writes the whole Analysis Meter project (code, UI layout and the brushed
+# silver skin generator, which also draws the spectrum curve, goniometer, meters, logo, title and button names) into
+# plugins/Analysis Meter/ on the build server, then builds and validates it.
+# To change the plugin later, edit the file contents below.
+
+on:
+  push:
+  workflow_dispatch:   # lets you press "Run workflow" from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write plugin files
+        run: |
+          set -e
+          mkdir -p "plugins/Analysis Meter"
+          cd "plugins/Analysis Meter"
+          mkdir -p "$(dirname "plugin.json")"
+          cat > "plugin.json" <<'AMEOF'
+          {
+            "name": "Analysis Meter",
+            "manufacturer": "gltchsqnz",
+            "version": "1.0.0",
+            "format": "vst2",
+            "kind": "effect",
+            "uid": "GAnM",
+            "numInputs": 2,
+            "numOutputs": 2,
+            "category": "Effect",
+            "shortName": "Analysis",
+            "knobs": [
+              { "parameter": 0, "label": "Source" },
+              { "parameter": 1, "label": "Response" },
+              { "parameter": 2, "label": "Slope" }
+            ],
+            "shiftKnobs": [
+              { "parameter": 4, "label": "ScopeGn" },
+              { "parameter": 5, "label": "Persist" },
+              { "parameter": 6, "label": "Refresh" }
+            ],
+            "file32": "VST/analysis-meter-arm32.so",
+            "file64": "VST/analysis-meter-arm64.so",
+            "description": "Spectrum analyser (8192-point FFT curve with slope, peak finder and cursor) and goniometer with phase correlation, balance and side/mid meters.",
+            "author": "gltchsqnz",
+            "url": "",
+            "license": "MIT"
+          }
+          AMEOF
+          mkdir -p "$(dirname "ui.json")"
+          cat > "ui.json" <<'AMEOF'
+          {
+            "kit": "silver",
+            "qlinkGroups": "rows",
+            "style": {
+              "background": "ffc4c7cd",
+              "text": "ff16181b",
+              "muted": "ff3d4148"
+            },
+            "pages": [
+              {
+                "name": "SPECTRUM",
+                "background": "silver_spectrum_bg.png",
+                "controls": [
+                  { "param": "Source", "widget": "knob", "overlay": "menu" },
+                  { "param": "Response", "widget": "switch" },
+                  { "param": "Slope", "widget": "switch" },
+                  { "param": "Cursor", "widget": "knob" }
+                ]
+              },
+              {
+                "name": "STEREO",
+                "background": "silver_stereo_bg.png",
+                "controls": [
+                  { "param": "Scope Gain", "widget": "knob", "overlay": "menu" },
+                  { "param": "Persistence", "widget": "knob" },
+                  { "param": "Refresh", "widget": "switch" }
+                ]
+              }
+            ]
+          }
+          AMEOF
+          mkdir -p "$(dirname "README.md")"
+          cat > "README.md" <<'AMEOF'
+          # Analysis Meter
+
+          A spectrum analyser and stereo meter for Akai MPC standalone, by gltchsqnz. The spectrum works like
+          Voxengo SPAN (an FFT curve on a log frequency axis); the stereo page has a goniometer, phase correlation,
+          balance and side / mid. Put it last on a track or the master: audio passes through untouched (bit-exact),
+          the plugin only measures.
+
+          ## SPECTRUM tab
+
+          - **The curve**: an 8192-point FFT (Hann window, 87.5 % overlap, about 47 new spectra a second; 16384
+            points at 88.2 / 96 kHz) drawn from 20 Hz to 20 kHz on a log axis, -90 to +6 dB. A column that covers
+            several FFT bins shows the loudest one; at the low end, where bins are wider than a column, the curve is
+            interpolated between bins.
+          - **Source** (knob, menu): **Stereo** (L and R analysed separately and their powers averaged, so
+            out-of-phase content does not cancel), **Mid** (L+R)/2, **Side** (L-R)/2, **Left**, **Right**
+          - **Response**: **FAST** (125 ms average), **SLOW** (1 s average), **PEAK** (instant rise, falls at 20 dB/s),
+            **MAX** (holds the highest level; switch to another response and back to clear it)
+          - **Slope**: tilts the display around 1 kHz like SPAN's slope: **FLAT**, **3 dB** or **4.5 dB** per octave
+            (default 4.5, so a typical mix looks roughly level). Only the curve is tilted, never the numbers.
+          - **Cursor** (knob, or touch / drag on the plot): a frequency marked by the amber line. The **CURSOR**
+            readout shows its frequency and the exact level there.
+          - **PEAK** readout: the frequency of the loudest component with its note name and tuning in cents
+            (A4 = 440 Hz), and its level.
+
+          ### Accuracy
+
+          - Calibration: a sine reads its peak level (a 0 dBFS sine reads 0.0 dB) at any frequency. Each bin's level
+            is the power of that bin and its two neighbours over the Hann window's main-lobe energy, which cancels the
+            window's scalloping loss. Measured with test tones at random frequencies (25 Hz .. 17 kHz) and levels
+            (0 to -60 dB) at 44.1, 48 and 96 kHz: Peak and Cursor readouts within 0.13 dB, the curve within one pixel
+            (0.36 dB).
+          - Peak frequency: interpolated between bins (log-parabolic, accurate for a Hann window); shown to 0.1 Hz
+            below 1 kHz and to 1 Hz above; largest error in the tests 0.13 Hz (at 27 Hz, where bins are 5.9 Hz apart).
+          - With **Stereo**, a signal in one channel only reads 3 dB lower (the power average of L and R); use
+            **Left** / **Right** to read one channel by itself.
+          - At 44.1 kHz the analyser stops at the Nyquist frequency, 22.05 kHz; the plot ends at 20 kHz.
+          - Noise is shown with the same calibration as tones (per FFT bin), so noise reads lower than its total
+            level, as in other FFT analysers. Use the Slope to view pink-noise-like material level.
+
+          ## STEREO tab
+
+          - **Goniometer**: Mid vertical, Side horizontal. Mono is a vertical line, a signal in L only lies on the
+            L diagonal and one in R only on the R diagonal, out-of-phase content spreads sideways (horizontal at
+            -1 correlation). At 0 dB scope gain every unclipped signal stays inside the outer diamond; the dashed
+            diamond is half scale. The plot is 51 columns x 56 rows; each column shows the span of rows hit.
+          - **Scope Gain** (knob, menu): **Auto** (zooms so the loudest recent peak fills 90 % of the scope; zooms
+            out at once, in at 10 dB/s, up to +36 dB) or fixed 0, +6, +12, +18, +24 dB. **Scope Level** shows the gain in
+            use.
+          - **Persistence**: how long a point stays lit, 20 .. 1000 ms (default 150 ms)
+          - **Refresh**: how often the screen is updated, **15 Hz**, **30 Hz** (default) or **60 Hz**. This affects the
+            screen only; the measuring runs on every sample.
+          - **Phase Correlation**: -1 .. +1, about 300 ms response. +1 is mono / in phase, 0 is wide or unrelated,
+            below 0 out of phase (red: problems when summed to mono).
+          - **Balance**: the level difference of R and L, L 24 .. R 24 dB (C = centred). Blue within 3 dB, amber to
+            12 dB, red beyond.
+          - **Side / Mid**: side level relative to mid level in dB ("mono" when there is no side signal at all).
+            About -20 dB is narrow, -10 to -6 dB wide, 0 dB or more means as much side as mid.
+
+          ## Programs
+
+          Mix (default: Fast, 4.5 dB slope), Flat FFT, Slow Average, Peaks, Max Hold, Side Check (Side source,
+          slow), Low End (Mid, flat, cursor at 60 Hz), Tuning (Mid, flat, cursor at 440 Hz).
+
+          ## Parameters
+
+          | # | Name | |
+          |---|------|--|
+          | 0 | Source | Stereo / Mid / Side / Left / Right |
+          | 1 | Response | Fast / Slow / Peak / Max |
+          | 2 | Slope | Flat / 3 dB/oct / 4.5 dB/oct |
+          | 3 | Cursor | 20 .. 20000 Hz |
+          | 4 | Scope Gain | Auto / 0 / +6 / +12 / +18 / +24 dB |
+          | 5 | Persistence | 20 .. 1000 ms |
+          | 6 | Refresh | 15 / 30 / 60 Hz |
+          | 7-166 | Curve 1-160 | readings: column heights |
+          | 167-169 | Cursor Level, Peak Freq, Peak Level | readings |
+          | 170-271 | Scope Up 1-51, Scope Dn 1-51 | readings: goniometer columns |
+          | 272-275 | Correlation, Balance, Side / Mid, Scope Level | readings |
+
+          Readings are written by the plugin and are not automatable.
+
+          ## How the meters reach the screen
+
+          The MPC gives scripted skins no audio of their own, and its graph (Plotter) widget does not draw, so every
+          reading is a parameter that the plugin writes and reports to the host. The spectrum curve is 160 columns,
+          each a film strip of a filled slice with a bright top edge (271 frames, one per pixel of height); the
+          goniometer is 102 film strips whose frame encodes the lit span of the column. Readings are re-sent only when
+          what they show has changed; numbers about 10 times a second. For 0.3 s after a project or preset load
+          nothing is written, so the loaded state stays intact.
+
+          With busy music the plugin reports about 2,500 (15 Hz), 4,200 (30 Hz) or 6,000 (60 Hz) parameter changes a
+          second. Utility Meter's ~30 Hz meters are proven on hardware, but this is many more readings at once. If the
+          screen lags or the MPC feels sluggish, lower **Refresh**.
+
+          ## CPU
+
+          The FFT work is spread over the audio blocks in small steps (no spike when a new spectrum is computed).
+          Measured on a desktop CPU: about 1 % of one core at 48 kHz, 2 % at 96 kHz, worst block well under 3 % of
+          its time budget. Expect several times that on the MPC: still a light plugin.
+
+          ## Knob FX mapping (MPC Sample)
+
+          Knobs: Source, Response, Slope. SHIFT knobs: Scope Gain, Persistence, Refresh. The MPC Sample has no screen
+          for the meters, so the plugin is of little use there; it passes audio through untouched.
+
+          ## Look
+
+          Brushed silver skin, blue Response / Slope / Refresh buttons with their names painted underneath, the
+          gltchsqnz logo with the title bottom right, dark LCD panels with the curve and the scope in the LED blue.
+          `make_silver.py` draws it all (curve slices, cursor line, scope strips, bars, grids, panels, logo). The
+          double-tap / Enter edit overlays use the MPC's usual dark background.
+
+          ## Licence
+
+          MIT. All code is original (radix-2 FFT, analysis and skin generator); the Poppins font masks are SIL OFL.
+          AMEOF
+          mkdir -p "$(dirname ".gitignore")"
+          cat > ".gitignore" <<'AMEOF'
+          build/
+          dist/
+          AMEOF
+          mkdir -p "$(dirname "src/AnalysisMeter.cpp")"
+          cat > "src/AnalysisMeter.cpp" <<'AMEOF'
+          // Analysis Meter - an MPC insert effect plugin by gltchsqnz
+          //
+          // A spectrum analyser in the manner of Voxengo SPAN and a goniometer with phase correlation, balance and
+          // side / mid meters. Audio passes through untouched (bit-exact); the plugin only measures. The measuring
+          // core is AnalysisDsp.h (its header explains the maths and the calibration).
+          //
+          // Signal flow:
+          //     in -> out (unchanged)
+          //      \-> source select (Stereo / Mid / Side / Left / Right) -> 8192-point FFT -> averaging -> 160 columns
+          //      \-> goniometer (M / S scatter with persistence), correlation, balance, side / mid
+          //
+          // How the screen is driven: the MPC has no level feed from a plugin, and its graph (Plotter) widget does
+          // not draw, so every reading is a parameter that the plugin writes itself (the read-only "readings") and
+          // reports to the host. The skin binds film-strip images and labels to them:
+          //   - the spectrum curve is 160 columns, each a film strip of a filled slice with a bright top edge
+          //     (frame = height in pixels),
+          //   - the goniometer is 51 columns x 2 halves, each a film strip whose frame encodes the lit span,
+          //   - correlation and balance are LED bars, the numbers are labels.
+          // The screen is refreshed at the Refresh rate (15 / 30 / 60 Hz), numbers about 10 times a second, and a
+          // reading is only re-sent when it has visibly changed. For 0.3 s after a project / preset load nothing is
+          // written, so the loaded state stays intact. The measuring itself runs on every sample, whatever the rate.
+          //
+          // Parameters (order is permanent once released; append new ones at the END):
+          //   Controls
+          //   0 Source       Stereo (L and R powers averaged), Mid, Side, Left, Right. Harmless on load (param 0).
+          //   1 Response     Fast (125 ms), Slow (1 s), Peak (20 dB/s fall), Max (holds the highest)
+          //   2 Slope        display tilt around 1 kHz: Flat, 3 dB/oct, 4.5 dB/oct (readouts are never tilted)
+          //   3 Cursor       a frequency whose exact level is shown in the Cursor readout (marker on the curve)
+          //   4 Scope Gain   goniometer gain: Auto, 0, +6, +12, +18, +24 dB
+          //   5 Persistence  how long a goniometer dot stays lit, 20 .. 1000 ms
+          //   6 Refresh      screen refresh: 15, 30, 60 Hz
+          //   Readings (written by the plugin, not automatable)
+          //   7 .. 166       Curve 1 .. 160   column heights (0 = empty, 1 .. 270 pixels)
+          //   167            Cursor Level     dB at the Cursor frequency
+          //   168            Peak Freq        frequency of the loudest component, Hz (0 = none)
+          //   169            Peak Level       its level, dB
+          //   170 .. 220     Scope Up 1 .. 51 goniometer columns, upper half (frame index of the lit span)
+          //   221 .. 271     Scope Dn 1 .. 51 goniometer columns, lower half
+          //   272            Correlation      -1 .. +1
+          //   273            Balance          dB, + = right louder
+          //   274            Side / Mid       dB
+          //   275            Scope Level      the goniometer gain in use (Auto shows what it chose)
+
+          #include "mpc_plugin.h"
+          #include "AnalysisDsp.h"
+
+          #include <algorithm>
+          #include <cmath>
+          #include <cstdio>
+          #include <cstring>
+
+          namespace {
+
+          constexpr int kCurveCols = ana::Spectrum::kCols;           // 160
+          constexpr int kScopeCols = ana::Goniometer::kCols;         // 51
+
+          enum ParamIndex
+          {
+              kSource = 0, kResponse, kSlope, kCursor, kScopeGain, kPersist, kRefresh,
+              kCurve0,
+              kCursorLevel = kCurve0 + kCurveCols,
+              kPeakFreq, kPeakLevel,
+              kScopeUp0,
+              kScopeDn0 = kScopeUp0 + kScopeCols,
+              kCorr = kScopeDn0 + kScopeCols,
+              kBalance, kSideMid, kScopeLevel,
+              kNumParams
+          };
+          static_assert(kCursorLevel == 167 && kScopeUp0 == 170 && kCorr == 272 && kNumParams == 276, "parameter map");
+
+          enum Source { kSrcStereo = 0, kSrcMid, kSrcSide, kSrcLeft, kSrcRight };
+
+          // Curve geometry: the column film strips have kCurveH + 1 frames (frame = filled height in pixels).
+          constexpr int kCurveH = 270;
+          constexpr double kDbLo = -90.0, kDbHi = 6.0;     // bottom and top of the spectrum plot
+          constexpr float kLevelLo = -150.0f;               // "nothing" for the dB readouts
+
+          const double kSlopes[] = {0.0, 3.0, 4.5};
+          const double kScopeGains[] = {0.0, 1.0, 1.99526231, 3.98107171, 7.94328235, 15.8489319};   // 0 = auto
+          const int kRates[] = {15, 30, 60};
+
+          const char* const kNoteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+          } // namespace
+
+          class AnalysisMeter : public mpc::Plugin
+          {
+          public:
+              AnalysisMeter() : mpc::Plugin(makeInfo())
+              {
+                  using namespace mpc;
+                  // ids are saved in projects: never rename them once released.
+                  addParam(choiceParam("source",   "Source",   {"Stereo", "Mid", "Side", "Left", "Right"}, kSrcStereo));
+                  addParam(choiceParam("response", "Response", {"Fast", "Slow", "Peak", "Max"}, ana::kFast));
+                  addParam(choiceParam("slope",    "Slope",    {"Flat", "3 dB/oct", "4.5 dB/oct"}, 2));
+                  addParam(logParam   ("cursor",   "Cursor",   20.0f, 20000.0f, 1000.0f, "Hz", 0));
+                  addParam(choiceParam("scopegain", "Scope Gain", {"Auto", "0 dB", "+6 dB", "+12 dB", "+18 dB", "+24 dB"}, 0));
+                  addParam(logParam   ("persist",  "Persistence", 20.0f, 1000.0f, 150.0f, "ms", 0));
+                  addParam(choiceParam("refresh",  "Refresh",  {"15 Hz", "30 Hz", "60 Hz"}, 1));
+
+                  char id[32], name[32];
+                  for (int c = 0; c < kCurveCols; ++c)
+                  {
+                      std::snprintf(id, sizeof(id), "curve%d", c + 1);
+                      std::snprintf(name, sizeof(name), "Curve %d", c + 1);
+                      reading(id, name, 0.0f, (float)kCurveH, 0);
+                  }
+                  reading("cursorlevel", "Cursor Level", kLevelLo, 12.0f);
+                  reading("peakfreq",    "Peak Freq",    0.0f, 24000.0f, 1);
+                  reading("peaklevel",   "Peak Level",   kLevelLo, 12.0f);
+                  for (int half = 0; half < 2; ++half)
+                      for (int c = 0; c < kScopeCols; ++c)
+                      {
+                          std::snprintf(id, sizeof(id), half ? "scopedn%d" : "scopeup%d", c + 1);
+                          std::snprintf(name, sizeof(name), half ? "Scope Dn %d" : "Scope Up %d", c + 1);
+                          reading(id, name, 0.0f, (float)(ana::Goniometer::kFrames - 1), 0);
+                      }
+                  reading("corr",       "Correlation", -1.0f, 1.0f, 2);
+                  reading("balance",    "Balance",     -24.0f, 24.0f, 1);
+                  reading("sidemid",    "Side / Mid",  -60.0f, 20.0f, 1);
+                  reading("scopelevel", "Scope Level", 0.0f, 36.0f, 1);
+
+                  // Built-in programs (plain values of the controls, in parameter order):
+                  //                        Source       Response     Slope Cursor  Gain Persist Refresh
+                  addProgram("Mix",        {kSrcStereo, ana::kFast,  2.0f, 1000.0f, 0.0f, 150.0f, 1.0f});
+                  addProgram("Flat FFT",   {kSrcStereo, ana::kFast,  0.0f, 1000.0f, 0.0f, 150.0f, 1.0f});
+                  addProgram("Slow Average", {kSrcStereo, ana::kSlow, 2.0f, 1000.0f, 0.0f, 300.0f, 1.0f});
+                  addProgram("Peaks",      {kSrcStereo, ana::kPeak,  2.0f, 1000.0f, 0.0f, 150.0f, 1.0f});
+                  addProgram("Max Hold",   {kSrcStereo, ana::kMax,   2.0f, 1000.0f, 0.0f, 150.0f, 1.0f});
+                  addProgram("Side Check", {kSrcSide,   ana::kSlow,  2.0f, 1000.0f, 0.0f, 300.0f, 1.0f});
+                  addProgram("Low End",    {kSrcMid,    ana::kSlow,  0.0f,   60.0f, 0.0f, 150.0f, 1.0f});
+                  addProgram("Tuning",     {kSrcMid,    ana::kFast,  0.0f,  440.0f, 0.0f, 150.0f, 1.0f});
+              }
+
+              void prepare(double sampleRate, int maxBlockSize) override
+              {
+                  (void)maxBlockSize;
+                  fs_ = sampleRate;
+                  spec_.prepare(sampleRate);
+                  for (int c = 0; c < kCurveCols; ++c)        // column centre in octaves from 1 kHz (for Slope)
+                      octaves_[c] = std::log2(ana::Spectrum::kFLo / 1000.0)
+                                  + (c + 0.5) / kCurveCols * std::log2(ana::Spectrum::kFHi / ana::Spectrum::kFLo);
+                  scope_.clear();
+                  stats_.prepare(sampleRate);
+                  lastSource_ = getInt(kSource);
+                  lastResponse_ = getInt(kResponse);
+                  spec_.setStereo(lastSource_ == kSrcStereo);
+                  spec_.setResponse(lastResponse_);
+                  tickCount_ = 0;
+                  numTicks_ = 0;
+                  quiet_ = 0;
+              }
+
+              void reset() override
+              {
+                  // Called on resume and after a state / preset load: keep the measurement, and stay quiet for a
+                  // moment so freshly loaded parameter values are not overwritten at once.
+                  quiet_ = (int)(fs_ * 0.3);
+              }
+
+              bool formatValue(int index, float v, std::string& out) override
+              {
+                  char buf[64];
+                  switch (index)
+                  {
+                      case kCursorLevel: case kPeakLevel:
+                          if (v <= kLevelLo + 0.05f) { out = "-inf dB"; return true; }
+                          out = clean(fmt(buf, sizeof(buf), "%.1f dB", v)); return true;
+                      case kPeakFreq:
+                      {
+                          if (v <= 0.0f) { out = "-"; return true; }
+                          const double midi = 69.0 + 12.0 * std::log2(v / 440.0);
+                          int note = (int)std::lround(midi);
+                          int cents = (int)std::lround((midi - note) * 100.0);
+                          if (cents == 50) { cents = -50; ++note; }
+                          const int octave = note / 12 - 1;
+                          const char* nn = kNoteNames[((note % 12) + 12) % 12];
+                          if (v < 1000.0f) std::snprintf(buf, sizeof(buf), "%.1f Hz  %s%d %+d ct", (double)v, nn, octave, cents);
+                          else std::snprintf(buf, sizeof(buf), "%.0f Hz  %s%d %+d ct", (double)v, nn, octave, cents);
+                          out = buf; return true;
+                      }
+                      case kPersist:
+                          std::snprintf(buf, sizeof(buf), "%.0f ms", (double)v); out = buf; return true;
+                      case kCursor:
+                          if (v < 1000.0f) std::snprintf(buf, sizeof(buf), "%.0f Hz", (double)v);
+                          else std::snprintf(buf, sizeof(buf), "%.2f kHz", (double)v / 1000.0);
+                          out = buf; return true;
+                      case kCorr:
+                          if (std::fabs(v) < 0.005f) { out = "0.00"; return true; }
+                          std::snprintf(buf, sizeof(buf), "%+.2f", (double)v); out = buf; return true;
+                      case kBalance:
+                          if (std::fabs(v) < 0.05f) { out = "C"; return true; }
+                          std::snprintf(buf, sizeof(buf), "%s %.1f dB", v < 0 ? "L" : "R", std::fabs((double)v)); out = buf; return true;
+                      case kSideMid:
+                          if (v <= -59.95f) { out = "mono"; return true; }
+                          out = clean(fmt(buf, sizeof(buf), "%.1f dB", v)); return true;
+                      case kScopeLevel:
+                          std::snprintf(buf, sizeof(buf), "%+.1f dB", (double)v); out = buf; return true;
+                      default:
+                          return false;
+                  }
+              }
+
+              void process(mpc::ProcessContext& ctx) override
+              {
+                  const int n = ctx.numFrames;
+                  const float* inL = ctx.inputs ? ctx.inputs[0] : nullptr;
+                  const float* inR = (ctx.inputs && ctx.numInputs > 1) ? ctx.inputs[1] : inL;
+
+                  // Audio passes through unchanged. With in-place processing the buffers are the same; otherwise copy.
+                  for (int c = 0; c < ctx.numOutputs; ++c)
+                  {
+                      const float* src = (c == 0) ? inL : inR;
+                      if (src && ctx.outputs[c] && ctx.outputs[c] != src) std::memcpy(ctx.outputs[c], src, sizeof(float) * (size_t)n);
+                  }
+                  if (!inL) return;
+
+                  const int source = getInt(kSource);
+                  if (source != lastSource_)
+                  {
+                      lastSource_ = source;
+                      spec_.setStereo(source == kSrcStereo);
+                      spec_.restart();
+                  }
+                  const int response = getInt(kResponse);
+                  if (response != lastResponse_)
+                  {
+                      lastResponse_ = response;
+                      spec_.setResponse(response);
+                  }
+                  const int rate = kRates[std::min(std::max(getInt(kRefresh), 0), 2)];
+                  const int tickLen = std::max(1, (int)std::lround(fs_ / rate));
+
+                  for (int i = 0; i < n; ++i)
+                  {
+                      const float l = inL[i], r = inR[i];
+                      float a = l, b = 0.0f;
+                      switch (source)
+                      {
+                          case kSrcStereo: a = l; b = r; break;
+                          case kSrcMid:    a = 0.5f * (l + r); break;
+                          case kSrcSide:   a = 0.5f * (l - r); break;
+                          case kSrcLeft:   a = l; break;
+                          default:         a = r; break;
+                      }
+                      if (spec_.push(a, b)) curveDirty_ = true;
+                      scope_.push(l, r);
+                      stats_.push(l, r);
+                      if (++tickCount_ >= tickLen) { tickCount_ = 0; tick(rate); }
+                  }
+                  stats_.flush();
+                  if (quiet_ > 0) quiet_ = std::max(0, quiet_ - n);
+              }
+
+          private:
+              static mpc::PluginInfo makeInfo()
+              {
+                  mpc::PluginInfo i;
+                  i.name = "Analysis Meter";
+                  i.vendor = "gltchsqnz";
+                  i.uniqueId = MPC_FOURCC('G', 'A', 'n', 'M');
+                  i.version = 1000;
+                  i.isInstrument = false;
+                  i.numInputs = 2;
+                  i.numOutputs = 2;
+                  i.tailSamples = 1;
+                  return i;
+              }
+
+              void reading(const char* id, const char* name, float lo, float hi, int decimals = 1)
+              {
+                  mpc::Param p = mpc::floatParam(id, name, lo, hi, lo, "", decimals);
+                  p.automatable = false;
+                  addParam(p);
+              }
+
+              static const char* fmt(char* buf, size_t size, const char* f, float v)
+              {
+                  std::snprintf(buf, size, f, (double)v);
+                  return buf;
+              }
+              static std::string clean(const char* s)            // "-0.0 ..." -> "0.0 ..."
+              {
+                  if (s[0] == '-' && s[1] == '0' && s[2] == '.' && s[3] == '0' && (s[4] == 0 || s[4] == ' ')) return std::string(s + 1);
+                  return s;
+              }
+
+              // Write a reading and tell the host when its value, quantised to `step` (the resolution shown on
+              // screen), has changed (or `force`). Quantising (rather than "moved by a whole step") means the
+              // screen always ends on the true value.
+              void publish(int idx, float plain, float step, bool force = false)
+              {
+                  if (quiet_ > 0 && !force) return;
+                  const mpc::Param& p = param(idx);
+                  plain = std::min(std::max(plain, std::fmin(p.min, p.max)), std::fmax(p.min, p.max));
+                  if (step > 0.0f) plain = std::round(plain / step) * step;
+                  plain = std::min(std::max(plain, std::fmin(p.min, p.max)), std::fmax(p.min, p.max));
+                  if (!force && std::fabs(get(idx) - plain) < step * 0.5f) return;
+                  set(idx, plain);
+                  notifyHostParameterChanged(idx);
+              }
+
+              static float dbOrFloor(double db) { return db <= -149.0 ? kLevelLo : (float)db; }
+
+              // One screen frame
+              void tick(int rate)
+              {
+                  ++numTicks_;
+                  const double frameSec = 1.0 / rate;
+
+                  // --- goniometer ---
+                  const int persist = std::max(1, (int)std::lround(get(kPersist) * 0.001 * rate));
+                  const int gm = std::min(std::max(getInt(kScopeGain), 0), 5);
+                  scope_.endFrame(persist, kScopeGains[gm], frameSec);
+                  for (int h = 0; h < 2; ++h)
+                      for (int c = 0; c < kScopeCols; ++c)
+                          publish((h ? kScopeDn0 : kScopeUp0) + c, (float)scope_.span(h, c), 1.0f);
+
+                  // --- correlation and balance bars ---
+                  publish(kCorr, (float)stats_.correlation(), 0.01f);
+                  publish(kBalance, (float)stats_.balanceDb(), 0.1f);
+
+                  // --- spectrum curve (only when a new spectrum has been computed) ---
+                  if (curveDirty_)
+                  {
+                      curveDirty_ = false;
+                      const double slope = kSlopes[std::min(std::max(getInt(kSlope), 0), 2)];
+                      for (int c = 0; c < kCurveCols; ++c)
+                      {
+                          double db = spec_.columnDb(c) + slope * octaves_[c];
+                          int h = 0;
+                          if (db > kDbLo) h = (int)std::lround((db - kDbLo) / (kDbHi - kDbLo) * kCurveH);
+                          h = std::min(std::max(h, 0), kCurveH);
+                          if (h == 0 && db > kDbLo) h = 1;
+                          publish(kCurve0 + c, (float)h, 1.0f);
+                      }
+                  }
+
+                  // --- numbers, about 10 times a second ---
+                  const int every = std::max(1, rate / 10);
+                  if (numTicks_ % every == 0)
+                  {
+                      publish(kCursorLevel, dbOrFloor(spec_.levelAt(get(kCursor))), 0.1f);
+                      publish(kPeakFreq, (float)spec_.peakHz(), spec_.peakHz() < 1000.0 ? 0.1f : 1.0f);
+                      publish(kPeakLevel, dbOrFloor(spec_.peakDb()), 0.1f);
+                      const double sm = stats_.sideMidDb();
+                      publish(kSideMid, sm <= -60.0 ? -60.0f : (float)sm, 0.1f);
+                      publish(kScopeLevel, (float)scope_.gainDb(), 0.1f);
+                  }
+              }
+
+              ana::Spectrum spec_;
+              ana::Goniometer scope_;
+              ana::StereoStats stats_;
+              double fs_ = 48000.0;
+              int tickCount_ = 0;
+              long numTicks_ = 0;
+              int quiet_ = 0;
+              int lastSource_ = 0, lastResponse_ = 0;
+              bool curveDirty_ = false;
+              double octaves_[kCurveCols] = {};
+          };
+
+          MPC_PLUGIN_ENTRY(AnalysisMeter)
+          AMEOF
+          mkdir -p "$(dirname "src/AnalysisDsp.h")"
+          cat > "src/AnalysisDsp.h" <<'AMEOF'
+          // AnalysisDsp.h - the measuring core of Analysis Meter (gltchsqnz, MIT licence)
+          //
+          // Three independent parts, all realtime-safe (memory is allocated in prepare(), never in process()):
+          //
+          //   Spectrum   FFT analyser in the manner of Voxengo SPAN.
+          //              - Window: Hann, N = 8192 points (16384 above 50 kHz sample rate), hop N/8 (87.5 % overlap),
+          //                so the spectrum is recomputed about 47 times a second. Each computation is spread over
+          //                the following hop in small steps, so no audio block carries a CPU spike.
+          //              - Stereo source: L and R go through ONE complex FFT (z = L + jR) and are separated
+          //                afterwards; their powers are averaged (so anti-phase content does not cancel).
+          //              - Calibration: a sine of amplitude A reads 20 log10(A) dB (0 dBFS sine = 0 dB) at any
+          //                frequency. Each bin's "tone level" is the power summed over that bin and its two
+          //                neighbours, divided by the Hann main-lobe energy (1.5 bins); this removes the Hann
+          //                scalloping loss (up to 1.42 dB) and leaves at most ~0.1 dB error, wherever the tone falls.
+          //              - Averaging (in power, per bin): Fast tau = 125 ms, Slow tau = 1 s; Peak = instant attack,
+          //                20 dB/s fall; Max = hold the highest value until reset.
+          //              - Display: 160 columns, log spaced 20 Hz .. 20 kHz. A column covering several bins shows the
+          //                loudest; a column narrower than a bin (low end) interpolates between bins in dB.
+          //              - Peak finder: loudest bin between 20 Hz and 20 kHz, refined by Gaussian (log-parabolic)
+          //                interpolation, which is near exact for a Hann window (error well under 0.05 bin).
+          //
+          //   Goniometer M = (L + R) / 2 vertical, S = (R - L) / 2 horizontal, so a mono signal is a vertical line,
+          //              L alone the left diagonal, R alone the right diagonal, anti-phase horizontal, and every
+          //              unclipped signal stays inside the diamond |M| + |S| <= 1 (at 0 dB scope gain).
+          //              The plot is a grid of COLS x ROWS cells per half (upper half M >= 0, lower half M < 0).
+          //              Every sample marks its cell with the current frame number; a cell is lit while it was hit
+          //              within the persistence time. For the screen, each column of each half is reported as the
+          //              span (nearest and farthest lit row from the centre line), one film-strip frame per span.
+          //
+          //   Stereo     correlation E[LR] / sqrt(E[L^2] E[R^2]), balance 10 log10(E[R^2] / E[L^2]) and
+          //              side / mid 10 log10(E[S^2] / E[M^2]), exponential averages with tau = 300 ms.
+
+          #pragma once
+
+          #include <algorithm>
+          #include <cmath>
+          #include <cstdint>
+          #include <cstring>
+          #include <vector>
+
+          namespace ana {
+
+          constexpr double kPi = 3.14159265358979323846;
+          constexpr double kSilentDb = -200.0;
+
+          inline double powToDb(double p) { return p > 1e-20 ? 10.0 * std::log10(p) : kSilentDb; }
+
+          // --------------------------------------------------------------------------------------------
+          // Radix-2 complex FFT (in place, float, precomputed twiddles and bit reversal)
+          // --------------------------------------------------------------------------------------------
+          class Fft
+          {
+          public:
+              void prepare(int n)
+              {
+                  n_ = n;
+                  bits_ = 0;
+                  while ((1 << bits_) < n) ++bits_;
+                  cosT_.resize((size_t)n / 2);
+                  sinT_.resize((size_t)n / 2);
+                  for (int i = 0; i < n / 2; ++i)
+                  {
+                      cosT_[(size_t)i] = (float)std::cos(2.0 * kPi * i / n);
+                      sinT_[(size_t)i] = (float)-std::sin(2.0 * kPi * i / n);
+                  }
+                  rev_.resize((size_t)n);
+                  for (int i = 0; i < n; ++i)
+                  {
+                      int r = 0;
+                      for (int b = 0; b < bits_; ++b) if (i & (1 << b)) r |= 1 << (bits_ - 1 - b);
+                      rev_[(size_t)i] = r;
+                  }
+              }
+
+              // The transform in steps, so it can be spread over several audio blocks:
+              // reorder(), then pass(0) .. pass(passes() - 1).
+              int passes() const { return bits_; }
+
+              void reorder(float* re, float* im) const
+              {
+                  for (int i = 0; i < n_; ++i)
+                  {
+                      const int r = rev_[(size_t)i];
+                      if (r > i) { std::swap(re[i], re[r]); std::swap(im[i], im[r]); }
+                  }
+              }
+
+              void pass(float* re, float* im, int p) const
+              {
+                  const int len = 2 << p, half = len >> 1, step = n_ / len;
+                  for (int i = 0; i < n_; i += len)
+                  {
+                      for (int j = 0; j < half; ++j)
+                      {
+                          const float wr = cosT_[(size_t)(j * step)], wi = sinT_[(size_t)(j * step)];
+                          const int a = i + j, b = a + half;
+                          const float tr = re[b] * wr - im[b] * wi;
+                          const float ti = re[b] * wi + im[b] * wr;
+                          re[b] = re[a] - tr; im[b] = im[a] - ti;
+                          re[a] += tr;        im[a] += ti;
+                      }
+                  }
+              }
+
+              void run(float* re, float* im) const
+              {
+                  reorder(re, im);
+                  for (int p = 0; p < bits_; ++p) pass(re, im, p);
+              }
+
+              int size() const { return n_; }
+
+          private:
+              int n_ = 0, bits_ = 0;
+              std::vector<float> cosT_, sinT_;
+              std::vector<int> rev_;
+          };
+
+          // --------------------------------------------------------------------------------------------
+          // Spectrum
+          // --------------------------------------------------------------------------------------------
+          enum Response { kFast = 0, kSlow, kPeak, kMax };
+
+          class Spectrum
+          {
+          public:
+              static constexpr int kCols = 160;
+              static constexpr double kFLo = 20.0, kFHi = 20000.0;
+
+              void prepare(double fs)
+              {
+                  fs_ = fs;
+                  n_ = fs > 50000.0 ? 16384 : 8192;
+                  hop_ = n_ / 8;
+                  nb_ = n_ / 2 + 1;
+                  fft_.prepare(n_);
+                  win_.resize((size_t)n_);
+                  for (int i = 0; i < n_; ++i) win_[(size_t)i] = (float)(0.5 - 0.5 * std::cos(2.0 * kPi * i / n_));   // periodic Hann
+                  bufL_.assign((size_t)n_, 0.0f);
+                  bufR_.assign((size_t)n_, 0.0f);
+                  re_.assign((size_t)n_, 0.0f);
+                  im_.assign((size_t)n_, 0.0f);
+                  avg_.assign((size_t)nb_, 0.0);
+                  tone_.assign((size_t)nb_, 0.0);
+                  colDb_.assign(kCols, kSilentDb);
+                  // power of a full-scale sine in one bin: (A N / 4)^2 per channel -> normalise to amplitude^2
+                  norm_ = 16.0 / ((double)n_ * (double)n_);
+                  df_ = fs / n_;
+                  const double frameRate = fs / hop_;
+                  aFast_ = 1.0 - std::exp(-1.0 / (0.125 * frameRate));
+                  aSlow_ = 1.0 - std::exp(-1.0 / (1.0 * frameRate));
+                  fallMul_ = std::pow(10.0, -(20.0 / frameRate) / 10.0);
+                  // column edges in bins
+                  for (int c = 0; c <= kCols; ++c)
+                      edge_[c] = kFLo * std::pow(kFHi / kFLo, (double)c / kCols) / df_;
+                  for (int c = 0; c < kCols; ++c)
+                      centre_[c] = kFLo * std::pow(kFHi / kFLo, (c + 0.5) / kCols) / df_;
+                  pos_ = 0;
+                  fill_ = 0;
+                  step_ = -1;
+                  clear();
+              }
+
+              void clear()
+              {
+                  std::fill(avg_.begin(), avg_.end(), 0.0);
+                  std::fill(tone_.begin(), tone_.end(), 0.0);
+                  std::fill(colDb_.begin(), colDb_.end(), kSilentDb);
+                  first_ = true;
+                  peakHz_ = 0.0;
+                  peakDb_ = kSilentDb;
+              }
+
+              void setResponse(int r) { if (r != resp_) { resp_ = r; clear(); } }
+
+              // a new source: forget the old signal completely (the window would otherwise still hold it)
+              void restart()
+              {
+                  std::fill(bufL_.begin(), bufL_.end(), 0.0f);
+                  std::fill(bufR_.begin(), bufR_.end(), 0.0f);
+                  fill_ = 0;
+                  step_ = -1;
+                  clear();
+              }
+
+              // One stereo frame (for a mono source: the signal as l, and r = 0 with setStereo(false)).
+              // Returns true when a new spectrum is ready.
+              //
+              // CPU spikes: computing a whole spectrum at once would put all the work into one audio block, so
+              // each analysis is split into small steps (window copy, bit reversal, one FFT pass per step,
+              // averaging, display), one step every kSlice samples. All steps finish well within one hop.
+              bool push(float l, float r)
+              {
+                  bufL_[(size_t)pos_] = l;
+                  bufR_[(size_t)pos_] = r;
+                  if (++pos_ == n_) pos_ = 0;
+                  bool done = false;
+                  if (++fill_ >= hop_)
+                  {
+                      fill_ = 0;
+                      if (step_ >= 0) while (step_ >= 0) done |= doStep();     // (safety) finish an unfinished job
+                      start_ = pos_;
+                      step_ = 0;
+                      done |= doStep();                                         // copies the oldest half at once
+                  }
+                  else if (step_ >= 0 && fill_ % kSlice == 0)
+                      done |= doStep();
+                  return done;
+              }
+
+              void setStereo(bool s) { stereo_ = s; }
+
+              // results
+              double columnDb(int c) const { return colDb_[(size_t)c]; }
+              double peakHz() const { return peakHz_; }
+              double peakDb() const { return peakDb_; }
+              double fftSize() const { return n_; }
+              double binHz() const { return df_; }
+
+              // tone level (dB) at any frequency: tone levels interpolated in dB between the two nearest bins
+              double levelAt(double hz) const
+              {
+                  const double b = hz / df_;
+                  int k = (int)std::floor(b);
+                  if (k < 1) k = 1;
+                  if (k > nb_ - 3) k = nb_ - 3;
+                  const double t = std::min(1.0, std::max(0.0, b - k));
+                  const double d0 = powToDb(tone_[(size_t)k]), d1 = powToDb(tone_[(size_t)k + 1]);
+                  if (d0 <= kSilentDb + 1.0 && d1 <= kSilentDb + 1.0) return kSilentDb;
+                  return d0 + (d1 - d0) * t;
+              }
+
+          private:
+              static constexpr int kSlice = 32;     // samples between analysis steps (hop / kSlice >= 32 steps)
+
+              // Runs the next step of the current analysis; returns true after the last one.
+              bool doStep()
+              {
+                  const int passes = fft_.passes();
+                  const int s = step_;
+                  if (s == 0 || s == 1)
+                  {
+                      // window copy, oldest half first (it is the half the incoming samples overwrite next)
+                      const int i0 = s == 0 ? 0 : n_ / 2, i1 = s == 0 ? n_ / 2 : n_;
+                      for (int i = i0; i < i1; ++i)
+                      {
+                          int j = start_ + i;
+                          if (j >= n_) j -= n_;
+                          const float w = win_[(size_t)i];
+                          re_[(size_t)i] = bufL_[(size_t)j] * w;
+                          im_[(size_t)i] = bufR_[(size_t)j] * w;
+                      }
+                  }
+                  else if (s == 2)
+                      fft_.reorder(re_.data(), im_.data());
+                  else if (s < 3 + passes)
+                      fft_.pass(re_.data(), im_.data(), s - 3);
+                  else if (s == 3 + passes)
+                      binsPart(0, nb_ / 2);
+                  else if (s == 4 + passes)
+                      binsPart(nb_ / 2, nb_);
+                  else
+                  {
+                      finish();
+                      step_ = -1;
+                      return true;
+                  }
+                  ++step_;
+                  return false;
+              }
+
+              void binsPart(int k0, int k1)
+              {
+                  const double a = resp_ == kSlow ? aSlow_ : aFast_;
+                  const double fallMul = fallMul_;
+                  for (int k = k0; k < k1; ++k)
+                  {
+                      double p;
+                      const float zr = re_[(size_t)k], zi = im_[(size_t)k];
+                      if (stereo_)
+                      {
+                          const int m = (n_ - k) & (n_ - 1);
+                          const float cr = re_[(size_t)m], ci = -im_[(size_t)m];          // conj(Z[N-k])
+                          // X_L = (Z + conj) / 2, X_R = (Z - conj) / 2j
+                          const double lr = 0.5 * (zr + cr), li = 0.5 * (zi + ci);
+                          const double rr = 0.5 * (zi - ci), ri = -0.5 * (zr - cr);
+                          p = 0.5 * ((lr * lr + li * li) + (rr * rr + ri * ri));
+                      }
+                      else
+                          p = (double)zr * zr + (double)zi * zi;
+                      p *= norm_;
+                      double& v = avg_[(size_t)k];
+                      switch (resp_)
+                      {
+                          case kFast: case kSlow: v = first_ ? p : v + a * (p - v); break;
+                          case kPeak: v = std::max(p, v * fallMul); break;
+                          default:    v = std::max(p, v); break;
+                      }
+                  }
+              }
+
+              void finish()
+              {
+                  first_ = false;
+                  // tone level: 3-bin power sum / Hann main-lobe energy (1.5)
+                  tone_[0] = (avg_[0] + avg_[1]) / 1.5;
+                  for (int k = 1; k < nb_ - 1; ++k)
+                      tone_[(size_t)k] = (avg_[(size_t)k - 1] + avg_[(size_t)k] + avg_[(size_t)k + 1]) / 1.5;
+                  tone_[(size_t)nb_ - 1] = (avg_[(size_t)nb_ - 2] + avg_[(size_t)nb_ - 1]) / 1.5;
+
+                  // display columns
+                  for (int c = 0; c < kCols; ++c)
+                  {
+                      const int k0 = (int)std::ceil(edge_[c]), k1 = (int)std::ceil(edge_[c + 1]) - 1;
+                      if (k1 >= k0)
+                      {
+                          double m = 0.0;
+                          for (int k = k0; k <= std::min(k1, nb_ - 1); ++k) m = std::max(m, tone_[(size_t)k]);
+                          colDb_[(size_t)c] = powToDb(m);
+                      }
+                      else
+                          colDb_[(size_t)c] = levelAt(centre_[c] * df_);
+                  }
+
+                  // peak finder (20 Hz .. 20 kHz, below Nyquist)
+                  const int kLo = std::max(2, (int)std::ceil(kFLo / df_));
+                  const int kHi = std::min(nb_ - 3, (int)std::floor(kFHi / df_));
+                  int best = -1;
+                  double bp = 0.0;
+                  for (int k = kLo; k <= kHi; ++k)
+                      if (avg_[(size_t)k] > bp) { bp = avg_[(size_t)k]; best = k; }
+                  if (best < 0 || powToDb(tone_[(size_t)best]) < -120.0)
+                  {
+                      peakHz_ = 0.0;
+                      peakDb_ = kSilentDb;
+                      return;
+                  }
+                  const double l0 = std::log(std::max(avg_[(size_t)best - 1], 1e-30));
+                  const double l1 = std::log(std::max(avg_[(size_t)best], 1e-30));
+                  const double l2 = std::log(std::max(avg_[(size_t)best + 1], 1e-30));
+                  const double den = l0 - 2.0 * l1 + l2;
+                  double d = den < 0.0 ? 0.5 * (l0 - l2) / den : 0.0;
+                  d = std::min(0.5, std::max(-0.5, d));
+                  peakHz_ = (best + d) * df_;
+                  peakDb_ = powToDb(tone_[(size_t)best]);
+              }
+
+              double fs_ = 48000.0, df_ = 5.86, norm_ = 1.0;
+              int n_ = 8192, hop_ = 1024, nb_ = 4097;
+              int pos_ = 0, fill_ = 0;
+              int resp_ = kFast;
+              bool stereo_ = true, first_ = true;
+              double aFast_ = 0.1, aSlow_ = 0.02, fallMul_ = 0.9;
+              int step_ = -1, start_ = 0;
+              double edge_[kCols + 1] = {}, centre_[kCols] = {};
+              double peakHz_ = 0.0, peakDb_ = kSilentDb;
+              Fft fft_;
+              std::vector<float> win_, bufL_, bufR_, re_, im_;
+              std::vector<double> avg_, tone_, colDb_;
+          };
+
+          // --------------------------------------------------------------------------------------------
+          // Goniometer
+          // --------------------------------------------------------------------------------------------
+          class Goniometer
+          {
+          public:
+              static constexpr int kCols = 51;          // odd: the centre column holds mono
+              static constexpr int kRows = 28;          // rows per half
+              static constexpr int kFrames = 1 + kRows * (kRows + 1) / 2;    // film-strip frames per column
+
+              void clear()
+              {
+                  std::fill(&hit_[0][0][0], &hit_[0][0][0] + 2 * kCols * kRows, -1000000);
+                  env_ = 0.0;
+              }
+
+              // one sample pair; gain = linear scope gain
+              void push(float l, float r)
+              {
+                  const float al = std::fabs(l), ar = std::fabs(r);
+                  const float mx = al > ar ? al : ar;
+                  if (mx > winPeak_) winPeak_ = mx;
+                  if (mx < 1e-5f) return;                         // below -100 dBFS: nothing to draw
+                  const float m = (l + r) * 0.5f * gain_, s = (r - l) * 0.5f * gain_;
+                  int c = (int)((s + 1.0f) * 0.5f * kCols);
+                  c = c < 0 ? 0 : (c >= kCols ? kCols - 1 : c);
+                  const int half = m >= 0.0f ? 0 : 1;
+                  int row = (int)(std::fabs(m) * kRows);
+                  row = row >= kRows ? kRows - 1 : row;
+                  hit_[half][c][row] = tick_;
+              }
+
+              // called once per display frame. persistTicks >= 1. gainMode: 0 = auto, else fixed linear gain.
+              void endFrame(int persistTicks, double fixedGain, double frameSeconds)
+              {
+                  // spans of lit rows per column and half
+                  for (int h = 0; h < 2; ++h)
+                      for (int c = 0; c < kCols; ++c)
+                      {
+                          int lo = -1, hi = -1;
+                          for (int r = 0; r < kRows; ++r)
+                              if (tick_ - hit_[h][c][r] < persistTicks) { if (lo < 0) lo = r; hi = r; }
+                          span_[h][c] = lo < 0 ? 0 : 1 + hi * (hi + 1) / 2 + lo;
+                      }
+                  ++tick_;
+                  // auto gain: follow the peak (instant up, 10 dB/s down) and keep it at 90 % of full scale
+                  const double fall = std::pow(10.0, -10.0 * frameSeconds / 20.0);
+                  env_ = std::max((double)winPeak_, env_ * fall);
+                  winPeak_ = 0.0f;
+                  double g;
+                  if (fixedGain > 0.0) g = fixedGain;
+                  else g = env_ > 1e-6 ? std::min(64.0, std::max(1.0, 0.9 / env_)) : gain_;
+                  gain_ = (float)g;
+              }
+
+              int span(int half, int col) const { return span_[half][col]; }
+              double gainDb() const { return 20.0 * std::log10(gain_); }
+
+          private:
+              int hit_[2][kCols][kRows];
+              int span_[2][kCols] = {};
+              int tick_ = 0;
+              float gain_ = 1.0f, winPeak_ = 0.0f;
+              double env_ = 0.0;
+          };
+
+          // --------------------------------------------------------------------------------------------
+          // Stereo statistics
+          // --------------------------------------------------------------------------------------------
+          class StereoStats
+          {
+          public:
+              void prepare(double fs) { a_ = 1.0 - std::exp(-1.0 / (0.3 * fs)); clear(); }
+              void clear() { ll_ = rr_ = lr_ = mm_ = ss_ = 0.0; }
+
+              void push(float l, float r)
+              {
+                  const double L = l, R = r, M = 0.5 * (L + R), S = 0.5 * (L - R);
+                  ll_ += a_ * (L * L - ll_);
+                  rr_ += a_ * (R * R - rr_);
+                  lr_ += a_ * (L * R - lr_);
+                  mm_ += a_ * (M * M - mm_);
+                  ss_ += a_ * (S * S - ss_);
+              }
+              void flush()   // keep the averages out of the denormal range during silence
+              {
+                  if (ll_ < 1e-30) ll_ = 0.0;
+                  if (rr_ < 1e-30) rr_ = 0.0;
+                  if (std::fabs(lr_) < 1e-30) lr_ = 0.0;
+                  if (mm_ < 1e-30) mm_ = 0.0;
+                  if (ss_ < 1e-30) ss_ = 0.0;
+              }
+
+              bool silent() const { return ll_ < 1e-10 && rr_ < 1e-10; }          // below -100 dBFS
+              double correlation() const
+              {
+                  const double d = ll_ * rr_;
+                  return d > 1e-24 ? std::max(-1.0, std::min(1.0, lr_ / std::sqrt(d))) : 0.0;
+              }
+              double balanceDb() const          // + = right louder
+              {
+                  if (silent()) return 0.0;
+                  return powToDb(std::max(rr_, 1e-20)) - powToDb(std::max(ll_, 1e-20));
+              }
+              double sideMidDb() const { return silent() ? kSilentDb : powToDb(ss_) - powToDb(std::max(mm_, 1e-20)); }
+
+          private:
+              double a_ = 0.0001, ll_ = 0, rr_ = 0, lr_ = 0, mm_ = 0, ss_ = 0;
+          };
+
+          } // namespace ana
+          AMEOF
+          mkdir -p "$(dirname "make_silver.py")"
+          cat > "make_silver.py" <<'AMEOF'
+          #!/usr/bin/env python3
+          """Analysis Meter - brushed silver skin.
+
+          Same design language as Sync Filter, Comb Filter, Utility Meter and Glitch FX: a brushed-aluminium version
+          of the SDK's UI kit (knobs, blue segment buttons), the gltchsqnz logo (about 1.5 cm) bottom right with the
+          bold title to its left, and the button names painted in black under the buttons. On top of the SDK's
+          gen_ui.py output it adds two pages:
+
+            SPECTRUM  an FFT spectrum curve (160 film-strip columns, each a translucent blue slice with a bright top
+                      edge, over a dB / frequency grid), a cursor line (a Slider bound to Cursor, so the plot can be
+                      touched to move it), and readouts for the cursor and the loudest frequency (with note name).
+            STEREO    a goniometer (51 columns x 2 halves of film strips over a diamond grid with L / R / M / S
+                      markings), a phase correlation bar (-1 .. +1), a balance bar (L 24 .. R 24 dB) and readings
+                      for side / mid and the scope gain.
+
+          The meters are film-strip images and labels bound to the plugin's read-only "reading" parameters, which
+          the plugin writes at the Refresh rate (numbers about 10 times a second). All text drawn by the MPC uses
+          its own Titillium Web; painted text (title, button names, scales) is pre-rendered Poppins Bold.
+
+          The result goes to ./skins/, which build.py copies verbatim into "Plugin Skins/".
+
+          Needs build/params.json first:   python tools/build.py "plugins/Analysis Meter" --target native
+          Run from anywhere:               python "plugins/Analysis Meter/make_silver.py"
+
+          Standard library only. Nothing here changes the SDK; the silver theme is registered inside this process.
+          """
+
+          import base64
+          import math
+          import os
+          import shutil
+          import struct
+          import sys
+          import zlib
+
+          HERE = os.path.dirname(os.path.abspath(__file__))
+          SDK = os.path.dirname(os.path.dirname(HERE))          # plugins/<Name>/ -> SDK root
+          sys.path.insert(0, os.path.join(SDK, "tools"))
+
+          import make_ui_kit as K   # noqa: E402
+          import gen_ui             # noqa: E402
+
+          ACCENT = "ff1d5fd6"       # the lit colour (knob arcs). Change it here.
+
+          # Button colours (brushed blue).
+          BTN_OFF = ((70, 120, 215, 255), (36, 78, 170, 255))     # top -> bottom, resting
+          BTN_ON = ((90, 158, 255, 255), (40, 112, 238, 255))     # top -> bottom, selected
+          BTN_EDGE_ON = (205, 228, 255, 255)
+          BTN_EDGE_OFF = (16, 40, 92, 255)
+
+          # Logo and text on the page.
+          LOGO_PLATE = 128          # logo size in screen pixels: about 1.5 cm on the 7" MPC screens (~85 px/cm)
+          LOGO_MARGIN = 26          # gap from the bottom-right corner of the screen
+          TITLE_GAP = 24            # gap between the title and the logo
+          TEXT_BLACK = (14, 15, 17)
+
+          # Names painted under the segment buttons (choice -> text).
+          CAPTIONS = {"Fast": "FAST", "Slow": "SLOW", "Peak": "PEAK", "Max": "MAX", "Flat": "FLAT",
+                      "3 dB/oct": "3 dB", "4.5 dB/oct": "4.5 dB", "15 Hz": "15 Hz", "30 Hz": "30 Hz", "60 Hz": "60 Hz"}
+
+          LOGO = (                  # the gltchsqnz invader, 8 x 7 cells
+              ".#....#.",
+              "..#..#..",
+              ".######.",
+              "##.##.##",
+              "########",
+              ".#....#.",
+              "..#..#..",
+          )
+
+          SILVER_GREYS = {
+              "bg":         "ffc4c7cd",   # page colour
+              "body":       "ffb4b8bf",   # knob / button body
+              "bodyLight":  "fff0f1f4",   # lit edge
+              "bodyDark":   "ff6f737b",   # shaded edge, grooves
+              "track":      "ff7c8089",   # unfilled arc / fader groove
+              "outline":    "ff25272b",
+              "pointer":    "ff1e2023",   # dark pointer on the light knob face
+              "thumb":      "ffd0d3d8",
+              "thumbLight": "fff4f5f7",
+              "thumbDark":  "ff9a9ea6",
+              "ledOff":     "ff9a9ea6",
+              "textOn":     "ff111214",
+          }
+
+          # ---- page geometry (tab coordinates, 1280 x 628) ---------------------------------------------
+          TOP_Y = 8                                  # the row of controls along the top of both pages
+
+          # SPECTRUM page
+          SPEC = (24, 132, 1232, 326)                # the spectrum panel
+          CURVE_COLS, COL_W, CURVE_H = 160, 7, 270   # must match the plugin (columns, frame = height in px)
+          PLOT_X, PLOT_Y = 96, 148                   # top-left of the plot
+          PLOT_W = CURVE_COLS * COL_W
+          DB_LO, DB_HI = -90.0, 6.0                  # bottom and top of the plot
+          F_LO, F_HI = 20.0, 20000.0
+          CURSOR_W = 9                               # cursor line (Slider thumb) width
+          CUR_BOX = (24, 474, 395, 142)              # cursor readout
+          PEAK_BOX = (435, 474, 395, 142)            # peak readout
+
+          # STEREO page
+          SCOPE = (24, 132, 496, 484)                # the goniometer panel
+          SC_COLS, SC_COL_W = 51, 9                  # must match the plugin
+          SC_ROWS, SC_ROW_H = 28, 8                  # rows per half
+          SC_FRAMES = 1 + SC_ROWS * (SC_ROWS + 1) // 2
+          SC_W, SC_HALF = SC_COLS * SC_COL_W, SC_ROWS * SC_ROW_H
+          SC_X = SCOPE[0] + (SCOPE[2] - SC_W) // 2
+          SC_Y = SCOPE[1] + (SCOPE[3] - 2 * SC_HALF) // 2          # top of the plot; the centre line is SC_Y + SC_HALF
+          CORR_P = (540, 132, 716, 100)
+          BAL_P = (540, 248, 716, 100)
+          INFO_P = (540, 364, 716, 94)
+          CORR_SEGS, CORR_PITCH, CORR_LIT = 40, 15, 12   # correlation bar: 40 segments of 0.05, -1 .. +1
+          CORR_FRAMES = 101                              # one frame per 0.02
+          BAL_SEGS, BAL_PITCH, BAL_LIT = 48, 12, 9       # balance bar: 48 segments of 1 dB, -24 .. +24
+          BAL_FRAMES = 97                                # one frame per 0.5 dB
+          BAR_H = 20
+
+          LCD = (21, 24, 30)                         # dark panel colour
+          LCD_TEXT = "fff0f5ff"
+          LCD_MUTED = "ff8fb4f0"
+          INK = "ff16181b"
+          INK_MUTED = "ff3d4148"
+          TRACE = (70, 150, 255)                     # spectrum / scope colour (the LED blue)
+          TRACE_HI = (196, 226, 255)                 # the bright edge / core
+          CURSOR_COL = (255, 186, 40)                # amber
+
+          # Pre-rendered text (Poppins Bold, SIL OFL), 8-bit alpha, zlib + base64.
+          # key: (width, height, baseline row, data).
+          TEXT_MASKS = {
+              'title': (234, 34, 26,
+                  "eNrlmA9MVVUcx88DVB7Gv2IpDIYujGhluvVv/dOoJHOumJRMCbE156xMV5phTdeSLMr5aNNRm83S1kQy28uwhj7BMk2LwOWMNGIi"
+                  "D/lT/MkHPOV0f79zz73nnHsv2gZlvLO9d3/nfM89v9/nnr/3EvKvJrfH7/e4SQgkD9WS538aPMROcy+zcgtU9ocMact/Ga6rAQPe"
+                  "ONykJZccvdgcfdksSL44qId/5F5L9zAH/vBhJnWXtLSUuC9NWu8yCl6hQ0q6mTVHZwwz6WU2R+n9xmg7NaSko9p0B1uvFNLtPJ9J"
+                  "h5R0tt4c7XIrLcz6rKmveddM4wk/sae1r7HsAZKLulCxDi6BGFZtKRbeBWZE3s5TPYHfP30cJ4Z5m6oopIF4Pb9NJk1Ysf9c8K8T"
+                  "Wx6SahuNKjIPLsVTv5oVfAIFPfA3V/KY97HezBYWTcxXer50nkr6DF6fYjcfBrsGrBtreSSHkmVSRVFI6bMsG3deIl3Qw/WvE21I"
+                  "VVkPbloHpWsxHw3NnV8GpZ9LHk8b7RTjevKjkT+uksZ0w3Uf3jsJyxZpVmKTGcrJaJFUVVTSGpZdQkVSj0DWOslCapGZvrqLctJ8"
+                  "yJfF9Wn//dcQy7iAdDFdKytWCkVSUorVsHvWgvnnWMU3fUckVRWVlN6K2WMiaZ7k/Ce3QmqVmd5LDdK9YM4hu+GyWPbY5GsyOjX5"
+                  "AptC1VW9NqRT0FgJRb+AVQLWb2Dtik9BD3+MEkhVRSKFLXQz5G7RjAHu4eoutBorj/azviLE60XrB6/XaycLTwJJxwFBVySZCyXV"
+                  "Emmhi7heReswIcvRqBxHyHiflZQcAqNWM+7AogwQA2AtIWRiL6TJAqmqSKT7tF9nlH7S8HEPOL0CudpWm1QJZoO89trJCunzYH1I"
+                  "SBRMtYFUwaMPzSow2wjB+8/i8hrnt5LiHKCT9YMQm7H1eB4piOEcJqmqSKSLYdAsIGRMu3Z9mnvA7i/CWhOwLE0itZMZpW96Amv8"
+                  "COQe0YztYKwSPL6E5iowLxDyK1zfYvLbVtLINqZH4OE2B6sVMVfB6hUTFVJVkXe3cja6YJT1xnEPTeoy8bBEaiezGRuht50GuXaY"
+                  "KbPAqhM8zkNzvh4eLuEFTF5oJWX0Z8Jm4vxmrccc4W4HvsyQSFVFJs2G/3QCm1q54aFfRZkjubeTjQmLaQ3kzmlz2ruXjz/57MHD"
+                  "w31koTNpGq4dmdvMpY6Qq9Z3csedt0v7qaLIpKM7YHikwsqU7UyaNThplq4+yds+qVR404kUl9QNjqOXYBfQHdD1wSQj9MhHN7EX"
+                  "JVobJp2RZEU5m8Ge1bJO++sYbXg4K+4N1tOgnSydFW9TH0Wjy4EUQc7hMS3Wb0eabbSxk7UdFgGJkKm79dFikFoUJTZ8uYJeKjU9"
+                  "VMC1AmtlFWgpR3ZvJ0ukG1VSOs2B9Dm8HhjvsMsQEn6GN5HJ2l7GMeLRmG2SWhSF1MWPZ/eaHnCPoGu055ONO/tHUB8Xj9eMLUSR"
+                  "RdLwZgvpew6kSUF25DhQFaC2pGzKa+mEHvZUzH2XEfUiGneapBZFHW+vs5YaXGZRPDsaNFf+zLS7jbk38I12crCTxeBmYCZVXJ20"
+                  "qWFLSt4Y7DQISX8WdCmPe49Y2x8pzFNVUUnTmbJO9DBfcv4B1n/fjMVGFoPbCvZR7ucmlB5zII00TqG0zpaUlGOuJ9b4NHJa8J0v"
+                  "rr2qYllDvjdOWqaHDcI9viisf3PQfOpWWQjOjV1eSKSFuMyBlEQ7v7Wx9KA5/FlK+YK77l4kv7UpioUUp90xxUN+N3/j2DRWvyG/"
+                  "1xxfFlm4Fc+69AbDURF/obYlJa7civb+xh02b+IsTcfcFHGhv+/d2rb+5oOFieqbuKxYSK+FzlquekhYub812F5TbC7W5PqS4z3G"
+                  "m7giD/EHESHhnvFtCHyivw6/WOaFACm+xbSOGfmgsbggrA+BLn0Bl70JIx80HL+YeEOgS3Mof6Uf6ekgfjgNu0Kj+xtMuS7V"),
+              'cap:FAST': (41, 11, 11,
+                  "eNpj+A8BDQxAsPf//yfMIAaDx9Yn32/PU2Fg+A8DDEgK5f8BGZ4gdUUQwa9mKApfxwCBHlC6ASSwGqTw5f9/fdm3/v/fygCUgqgA"
+                  "KnzAAAGM9//f2/H/pzCQ+eH/J04GvZaWfJA4VAXCZuf//5uB2vOAzP7//+/V60MNwFC45P9/De4v/8+DDM+7DRS8mYyq8DXEifzf"
+                  "/l+VkNj4/78hWFq77OH//2UoCqFuTIf5bxIDQ3VDBQOD+P//l7ApPAlT+Jad4cL///OTFv//vxeLQq3//3eD6Jn//4cyuP0Ea/nl"
+                  "iEVh9///YLc7/P+/nYHBYMWzX683mCF5BgAW++AK"),
+              'cap:SLOW': (48, 11, 11,
+                  "eNpFkE1IlFEUht9JgiaHMBhoFpIKLkIzw8VsdCOIunfVQkSllZGSOARCzkKEFiqIQbnQITfqxja6EBQXWlAuxhBCR03705LQLBnz"
+                  "Zx7vvR/O3M2555yHc97zSrVT35KJ4UIJtuS9YFf8cP9DJCBF4Ll09R80S6Wwoie4dxTO8OU7Xm3jrspgTqowyWvpIfTqJ6m+ljWY"
+                  "SvO3f8N0a8dbk+f49vjj0zPDf5GGoEYHHPp1r7u7Nc0POg26MgERjcMdzXMGBYqT9KsfNrtKLXfJfyYVsLHYajEa6q8dMwyN/lNm"
+                  "JN/jhNm22pzhj/nl4nX4pHwYqILwNrFyaHeN4si2XX3Jb2bmz0rrvOthPyvGVhuUSJ3Rp9It+JjmX3j6fWNu3kuSS0yqARb5bspx"
+                  "GGkataPgaygUCijP+dO+YA67IdVZZx8p14aY4av/O69PKuWZHjX+73rf9SLTv3mOtUj2ygd2/f2xHyd7b8LK8ApGl/8eLHVkO3nv"
+                  "cTpeQSooXQARqRYF"),
+              'cap:PEAK': (43, 11, 11,
+                  "eNpj+A8E/15vMGVg+A8BDCCw9///J8wgxv//D4Dkyv//F8IV/LREVir/D8jwhCst////KDuI/TomcfX//5vBLCAAKWgA6VkNU+r2"
+                  "9/9DMZg23v//r0PtAgHG+//v7fj/UxgirfT2/2c9iLbXMQlAUzdBHdAAFHP+/7855v//PLD0i4v///kzQJRC3GqOpHTJ//8a3F/+"
+                  "n4dJH2OAKwWGgBED1K1Aq/i//b8qIbHx/39DkODzs///VzMgQgOFlQ616f8ksKDcq///AtGVQkPgJEzpW3awtMPv/1/00ZRCwlXr"
+                  "///dIP7M//9DIdL5//8/FMemtPv//2QQ3+H//+1Q6UVAr7EDAM/D/fQ="),
+              'cap:MAX': (39, 11, 11,
+                  "eNo10E0oxEEYx/FHshtrQy7rwk2itrTlIMpbypVc5MRBUi7uUsqB8paDLeUiDk6KKMmZlMO2h734Lzlg02bb1tvu/+uZ2TGX+fU8"
+                  "n3lmGgF2xKwtTTZcwXOl7kM+mSaRQfBCos1crRars461+BpGTNqAcwmk8AfEMGa1NoVjSyYcmxRMwNwi7EqZJXS/dazC4+GC70bj"
+                  "ol8UPnkMW/ZRpFdiFHOW6VOWJ2HePnPBnB0Wy9KnHMkeZ2nLDqAtlOfesho9ei2OjfLTmmfMsroCyUjkBDpNc1WHlfodq3ojRSZg"
+                  "2QxubWuvq8gLPNWXmaxreVMsu/ln70EJJvG79+HQsQ4tRy1rh0tzRxzGZQXiEvZgosx0xp1YtgbThvXpz8Z+eW0Q6SmRbf4DnPLn"
+                  "xw=="),
+              'cap:FLAT': (39, 11, 11,
+                  "eNpj+A8BDQz//z9ggIK9//8/YQYx/sMAAxZl8v+AAp7oyl7HAIEekrIGkMRqEAsoAZFHyMIZjPf/39vx/6cwijDMToQy5///m4GG"
+                  "5BFQtuT/fw3uL//Poyl7DXYaXBn/t/9XJSQ2/v9viKoMzW3pMN9NwqHssYSEBA/DSZiyt+zYlYEdqfX//24Qd+b//6F4lHX//58M"
+                  "4jr8/78dIQ8ARj7KBQ=="),
+              'cap:3 dB': (36, 12, 12,
+                  "eNpjYPA++PrrmWQGZPD//wMUfsp/MCjDUAMW/n6jjp2B4fb///Mb/v9/hl0NEMxlYGjt6OBheP3/PURWfvmbr7uNoGpex8Q2/4XK"
+                  "hE79/38imCX1EqTzI1QNkFD98v88WObF/39VTGDWrP//7xVWvUG264oeVM3/54Zg1uP//xQZGFyQ1Pydxw2WYXH9+/84mPXz/ysg"
+                  "yY1wz5T//+cxMOw7spWB4eX/bzBzVBDmgALpDcjNl/7/r8z5//8OzD33Ee55HRPT+///QwaGCIi9mRB/vQCxP6GETx1Q3Gn3i+/n"
+                  "4hng4fPtoDlCzbcr+UwMADhv07o="),
+              'cap:4.5 dB': (52, 12, 12,
+                  "eNpjYEADMVDAgyz4//8DdHXd////R0hDgAq6HrDo9xt17GARx39E6wGCuSABwcf//yLrQXGG/PI3X3cbQfS8jolt/vv/PUh41f8t"
+                  "D5D1PJv44PNBawhP6iXI6I8QPUDDVL/8Pw8UTvj/VeEBhtt+GoJ5s/7/v1dY9QbJbVf0GBiUPv0vZUDVsztz1///y8C8x///KTIw"
+                  "uCD0/J3HzcBw7P/nhJjX///HxED0+Pj4cDOI/P9/Fcz7+f8VkOSG+2fK///zEOEEs6m8poqFQer//4swe1Tg9oAC5w0oDJD0SAcJ"
+                  "MjBc+P9/Ter+//+nwfxzH+6f1zExvf//P4R6AuKfx/8PMjB4/AYb8FoOEm4vQJxPyPFTh6Jn+fd2IGm65sXvl0uVEPHz7aA5XM+3"
+                  "K/lMDABHXSLl"),
+              'cap:15 Hz': (41, 12, 12,
+                  "eNrTi4mJCWBgiIECHgZcoOH///8PGBj+Q4EKWBAsxMDw4P9/MhRCRaFSyEJQhVATEAqfTXzw+aA1EQrB4KchVOF/uDzQh5v+/z+K"
+                  "pHB35q7//5dhKGRgcPz1/5oQTKGPjw83g8j//1ehCl+Dwuo1WKHG+/9P5OAOKq+pYmGQ+v//IoYbRe/+/6CLEL3w//+a1P3//0/D"
+                  "UHj8//9ZQNNhoh6/wU56LUfI1wyma178frlUCXfwAACn8+JW"),
+              'cap:30 Hz': (45, 12, 12,
+                  "eNp9kT1LQlEYx/9Gbi0Kra1FEdFHKGhqDhouBNpQEI1BTS2Ba4hLS98hKIcgCAoLX4aGlhKEezPjDhak0YX6de65IsFVn+V5Ob/n"
+                  "9Uir136nkpWRVN4N3HxKw2UTK3tSsmytctLGoRGqBvyDn+D0EJpSBiq7VcgMh49yuQn5tKUizGkBLmJw1DzKWivAsdSkk1Ciy8tI"
+                  "uMXvwZgUWKzJdw+mzziOcwa3PZjXxRB2jeMNgKWlgMe0jY+v/FAKa34Y57M/hm8KOr6FZ9p4U0Zf3ZxLb3TtgtOahWJs5sk67/Oh"
+                  "9wD7O/BsL363dQ/ZGFyCE9NFWo8G2zafUrNWNTniGsuXra/aRviQLniBV4j2GAj/AXaF9vQ="),
+              'cap:60 Hz': (45, 12, 12,
+                  "eNp1kb1LA0EQxV/AsxCbHIiexRVpFEX0X7BLY2MnXBUl2ij4rxhTqJ2FvQqmEy1EJSbBRhQRArcRQ8AP/IBbCM/ZPT+Ky71mhp3f"
+                  "7r6ZAYa3lFabWYiypVCHJZv21sAtjWp9gFO1adWxBbJpQpP8h9fJs9UGOQ8UyKu1GllIhY9JH14+nwMq5CSmyaMEzFho83nhLrqe"
+                  "k/NHfmaQ+WIrFdaMuhK7M5C0Za9EP/CvgCAIDsSuEDxcPiX3DBwKpHrAwKzmjSs23vvhkQ3z5pscf/zZ6MiDQcfC4y9UvmlQ4BGy"
+                  "bhscwwRZSXgeeuDrVDy6/eIJuQEskRcrl+RiAj4nt+UXDN5bX+1RWUo93o+TOg14O0o/7fqm4JZl82UXafA34TMEoQ=="),
+              's13:+6': (16, 9, 9,
+                  "eNpjYICBgru/HlYxwrlx//8//vc/Dcj6/98FSB7+38fgVxME53/433n741pRIA8MGH7//3fv7/8VDFeu/P9//8oVhmf/cxly/r+D"
+                  "q9/7PweFH/7/792//6fC7WMovfvrWTcHACy8QRI="),
+              's13:0': (9, 9, 9,
+                  "eNoVyyEOQGAAhuF3AklwCE4hmi7YBIXLSFxAcQfuQjSGKvLP9qE/DxTjvdc2RNL2qIJBLZlOh1UpnhRwKcaSQhYluJJPr478N9+a"
+                  "zb8oJ3M0Ni+SuSks"),
+              's13:-12': (20, 9, 9,
+                  "eNpjYICAhv///7twTn71+agFAwxkXQGKzfj/+e3/1zxwQQag2Nv/hgr//5ujiEnLMGr//y/JcAUMIGIMDJxH/i8GMUEAKsa17f9J"
+                  "fgYUvQrn/2/iY2BAs+P/1StXLFDEIOa4AAB6k0Vj"),
+              's13:-24': (24, 9, 9,
+                  "eNpjYIACzsmvPh+1ALGm///vwgAHM/5/fvv/NQ8Dg+9/FPG3/w0V/v83Z5B4dRZFXFqGUfv/f0nG7X+MweJXwABsw5H/ixny//cz"
+                  "gMX/gwFQmGvb/5P8DN//37ny///9K3BzFM7/38QHUwZWCLP3/9UrV8AORbEXoswFJg4AU85VBw=="),
+              's13:-36': (24, 9, 9,
+                  "eNpjYIAC58Mfvhx0ZGAouPvrYRUjTJRB88f/l5/+/5SK+///8b//aXDx8AtHOOT+/zc6/L+Pwa8miAEBxK99+dnF8OF/5+2Pa0UZ"
+                  "GK6AAVBc5v//TxkMv///u/f3/woGhv9gANLAGvz/r+yz/7kMOf/fwU1J/nCQUfz/f6u9/3NQxFW//b/9/P8LrvD/f+/+/T8VYa39"
+                  "vvdf9ugxMJTe/fWsm4MBACfAW1Q="),
+              's13:-48': (25, 9, 9,
+                  "eNpjYECA6f//uzBobPn445w/AzLw/Q+SuPb/x7v/f+SQxCVenQVJvPmfJP//vwFCnHH7H2OQhNfL72//NwIFroABA0P+/34GkET8"
+                  "b6CJG4ES/8GAgeH7/ztX/v+/f+Xp/1qr//91EEb9h4LP/9OU/v83R3EW2KhF/7+/+X+fFVOCZ/qbr9tUGRgAyJpbzw=="),
+              's13:-60': (25, 9, 9,
+                  "eNpNjrELAWEAxR/DsRgM/gT+CqOMihKDFIPplMUi+yW5zWQxWkysJv+CovQJl7PpbHx89+Qr537j+9V7D/jREfLUiwCN7dMdGUGM"
+                  "Oun4bCFHXt60/mJNG4V+CUtOUKUXC4THwf4+T8FhGUkyg40GeNE/KM7wYB5RMgtqAJdtmLzhzCISZDqoWtHUYsEpauGNCpVQHH9f"
+                  "HWX4FbpCusM40NzJq23gAytEXwE="),
+              's13:-72': (23, 9, 9,
+                  "eNpjYICC/2DAwDn51eejFgxwcOXKldv/vzPM+P/57f/XPAxIoOD/PIa3/w0V/v83RxJluvffiEFahlH7/39JkGYgAAkH/j8GojiP"
+                  "/F8MtwoIDv2PApJc2/6f5Ecyw+j/CzYGBoXz/zfxIVu4+H8TkHz7///VK1cQLpT89VsK7nwXAH2JSFU="),
+              's13:-84': (25, 9, 9,
+                  "eNpjYIACjS0ff5zzBzOn///vwgAH1/7/ePf/jxyQ5fsfReLN/yT5//8NGBgkXp1FkfB6+f3t/0YGBsbtf4zBElfAgIEh/jfQhI0M"
+                  "DPn/+xnAEv/BgIHh6f9aq///dRi+/79z5f//+1fgRn3+n6b0/785VCFIKRQs+v/9zf/7rGA2iuU809983abKAJcAAORKW88="),
+              's13:20': (16, 9, 9,
+                  "eNodzD8LAQEAhvGX4XTyJ6MYbmExmdxgvOwGZbDwZW5isSiL8g2QT8BgspwYRSi6UrdwqYfz7M9P5vAerG2pu39f+4Y0IvB5pBy4"
+                  "fHAln6oFtQVjtXkmVCjGKpA/01IOypLMFVO9aCgOdSm5ZJPViabSUJK1ZZaR5kzUiX4fdp5n//xjGPn8c9Q7hLeBoS8XCUyN"),
+              's13:50': (17, 9, 9,
+                  "eNodjbEOwWAABr8Y1GKod+ApjI3BJiIhsbBYeIfGYsFmsnTrZuEFvEMTJoqqVVi00Zz+brzhTvwZS4NDEi+KEpyDIOjJgfuXmRGO"
+                  "DDvW6vK0crGJX35FNzqyoZYLwgxfHxoqQF2u29SIt660VIZqyfPamhBpi6e+aezhkjE3lzA1F3sVJaepJQ2P6WNZ1A8M/VTj"),
+              's13:100': (22, 9, 9,
+                  "eNpr+P//vwsDQ+L1n8962eB01hWQqMv//0///G+H0wwMINEt/2czRPz/wA6jIaKP/4cyCP7/rwajIaI//rsxMP3/bwOjIaKP/gcy"
+                  "8P7/rwqjIaKb/y9giAGaB6MhokC7H/yCuAFMQ0QZkm78et7HBqcBr3dpZg=="),
+              's13:200': (25, 9, 9,
+                  "eNpFz70KQQEAxfHDQFc+MorhLiwmE4PxZjcog4WXMbFYlEV5A+QJGEwWYhSh6JaycFN/n917pt90OkdG53ybFaT6+nFsBeShy83m"
+                  "Erbg8KQpubDJmZAf01OVa1AukilfFhJ7KopDRi4kY8pAd0ryQ9GDQhPmMe0oKwJpD+aCYVQa0VftU+3ChtVyWXiP2Tr/VT/wjaXG"
+                  "xjm1Pz/+eAEfS3W4"),
+              's13:500': (26, 9, 9,
+                  "eNpFz70OwXAYxeETg1oM3ANXYRSDTURCYmGxcA+NxYLNZOnWzcINuIcmTL4/VmHRhvwoTf9neqb3nFf80pVaK/8ySsoAtp7nNVSE"
+                  "84uBDKCoMAumqnOzDGB2ubtZHakpA3mDb8nujasnJSWgYGDbZXV46EBFacjFSDlOVT1OmuOoGZ6PsYT9m2E4aRdE2/7ITE7+pm9J"
+                  "7XVwHYf/RPgAuWZ+Dg=="),
+              's13:1k': (14, 9, 9,
+                  "eNpr+P//vwsDCINA1hVkHgMDlCdw7/8BNhjPddP/G4JwuZ3/XysjVP7/n46kb83/l0pIpqz4f1MIweO99f8wOwDUKD0H"),
+              's13:2k': (16, 9, 9,
+                  "eNpj4Jz86vNRC4b//10YwGDG/89v/7/mgfPf/jdU+P/fHMgXuPf/ABuDtAyj9v//kv//u276f0MQpILzyP/FQP07/79WBnG5tv0/"
+                  "yQ/k//+fDuIqnP+/iY8ByF/z/6US2Lz/V69csQCat+L/TSEGsEIgB4h4b/0/zA4ARhBJWQ=="),
+              's13:5k': (17, 9, 9,
+                  "eNpj+A8GOQz//7swgMH///evXLkSiSzgAqMF7v0/wAZkrHv2abkQkHbd9P+GIEjm/4O//5cD6Z3/XysDlTY0eDGk//8MkvifDuRz"
+                  "LFgQzJD7/wlQYM3/l0pAkYP//z/8+78HZOiK/zeFGBgEpz75ea+JHSTAe+v/YXYAHb9Rrw=="),
+              's13:10k': (22, 9, 9,
+                  "eNpr+P//vwsDQ+L1n8962RjAbCDIugJiufz///TP/3a4KAOYteX/bIaI/x/YgWyBe/8PsEFEH/8PZRD8/1/t/3/XTf9vCELV/vjv"
+                  "xsD0/7/N//87/79Whpnw6H8gA+///6pAq/+nw83d/H8BQwzY3DX/XyrBRIFuePAL4oYV/28KQUUZkm78et4Hdi/vrf+H2QEo4GYy"),
+              's13:20k': (25, 9, 9,
+                  "eNpj4Jz86vNRCwaGxOs/n/WyMTD8/+/CAAYz/n9++/81j8v//0///G9Hknj731Dh/3/zLf9nM0T8/8AOkhC49/8AG4O0DKP2//+S"
+                  "j/+HMgj+/68GlHDd9P+GIEgP55H/ixl+/HdjYPr/3wYosfP/a2WQONe2/yf5GR79D2Tg/f9fFSjx/386SFzh/P9NfAwMm/8vYIiB"
+                  "2LHm/0slsOX/r165YgF01YNfUFet+H9TiAGsFeTEpBu/nvdB/MF76/9hdgA91nKE"),
+              's13:-1': (13, 9, 9,
+                  "eNpjYICAhv///7tA2QxZV5A4DAwYnCtgAOX8BwNsynByALyuIgI="),
+              's13:-0.5': (28, 9, 9,
+                  "eNpjYICBxOs/n/WygZn/wSAHLuXy///TP//boXL3r1y5EgmX2/J/NkPE/w/sEDkXBmTw+H8og+D//2oQuXXPPi0XYrgCBgwMP/67"
+                  "MTD9/28Dte/B3//LofYyMDz6H8jA+/+/KkiuocGLIf3/Z7iZm/8vYIiB2MexYEEwQ+7/J8jufPAL6M6Ze0QYDv7///Dv/x6EY5Ju"
+                  "/Hrex8Zw4KECg+DUJz/vNbEDAKK/Yv8="),
+              's13:+0.5': (29, 9, 9,
+                  "eNpjYICBxOs/n/WygZn/wSAHLsXg8v//0z//26GS969cuRIJYboAyS3/ZzNE/P/AjhBhQDAf/w9lEPz/Xw0isu7Zp+VCMPP/M/z4"
+                  "78bA9P+/DdTOB3//L2dguHIFbAPDo/+BDLz//6uCJBsavBjS/39GGLv5/wKGGIidHAsWBDPk/n+CkAS69sEvkGtn7hE5+P//w7//"
+                  "exBeYUi68et5H9CfBx4qCE598vNeEzsDACmIbjs="),
+              's13:+1': (13, 9, 9,
+                  "eNpjYICAhv///7tA2QxZVyAcqBAG5z8EQDhXgIrvX7mCRRkaBwr+/3cBACpvLT4="),
+              's13:L 24': (25, 9, 9,
+                  "eNpj+P/fhQEMOCe/+nzUAsSaDhaDS8z4//nt/9c8DAy+/1El3v43VPj/35xB4tVZVAlpGUbt//8lGbf/MUaVANpy5P9ihvz//Qxo"
+                  "Elzb/p/kZ/j+/86V///vX0FIKJz/v4kPpBACgIydCxZALP9/9coVsHuhRoGkGWBKXWASAFUSYtU="),
+              's13:R 24': (28, 9, 9,
+                  "eNpj+P///7/nE7kZgIBz8qvPRy1ALIbp//+7MDD8/3//+u//c0ACM/5/fvv/NQ+Q5fsfKufCkPz/I0ju7X9Dhf//zRkYJF6dhckx"
+                  "1/9/CZKTlmHU/v9fkoFx+x9jqBwI1IFtYeA88n8xA0P+/34GqNzz//8zIFJc2/6f5Gdg+P7/zhWgM64A5Tyu/m8GSymc/7+JjwFm"
+                  "1P//IM3u/39qQtzy/+qVKxBPwN259f8hRrh6F7gcADIEeOE="),
+              's13:12': (13, 9, 9,
+                  "eNpr+P//vwsD5+RXn49aMGRdAXFm/P/89v9rHgYGEOftf0OF///NIRxpGUbt//8lIRwGBs4j/xczQDlc2/6f5IdyFM7/38THwAAz"
+                  "4P/VK1csIJz/YOACAHoEOnE="),
+              's13:C': (10, 9, 9,
+                  "eNpjYOBpvf39wSw5BgbeK///3v/5/7kqQ/f/Z5oMktf+r2O4/7+QgYGBiYWZ4cd/XwYIePC/CCrW+/+pOoM4SB3f1f9/7/34/1Id"
+                  "aEzn3R+P5ioyAADnyibo"),
+              's13:dB': (18, 9, 9,
+                  "eNpjYAABl///Gf4DwdejlgwMSCL3r3z+/5aXgaHg7o9TNWARFwbF//8tGPL//3/9+j9UxO7/LwmG2/8Xs7Asg5rz/1MYA8PP//4M"
+                  "DAFQc77+38jIcOv/EhbmJVBd0v//GzPkAM159R9u1y9JBob8uz/PNUDN+X7elwEAkzZgog=="),
+              's13:Hz': (17, 9, 9,
+                  "eNpj+P/fhYHB5f9/BhjAI/AfDJAErly58vP/T6g4REvW/58+QIH7V67cBwvE/fvlj2xG0J/fQSiG/vz/GWgMhi0AIXJNrQ=="),
+              's17:L': (8, 12, 12,
+                  "eNpj+P//CwMIUE5/DwkJ0QLSINAAowEt1iuS"),
+              's17:R': (11, 12, 12,
+                  "eNpj+A8Cb7aYMzAw/IeA37Yg5u858679/38QxPzCwMD79/9XCJPJ4///p3C1/yfAmbt5wNp2/f8/mwFs2BeuF/8/SUKYDAX//y+C"
+                  "Mjme/P9nBTU36///s0wAL8pRnQ=="),
+              's17:M': (16, 12, 12,
+                  "eNpj+P///1YGMNj3//8XBgYg/68yiKv5H8b/3wviT0bw33ExMPB8hPH//f+fwsCQ+f8vlP/l6P/zDAyX/++C8RP//7ex+/8/HMbn"
+                  "/vh/xcr/b9lhfIaZ/3/9+j+RAc43A1mij+AzXPz//zQDEj/v//9MCBMALUF18g=="),
+              's17:+S': (21, 12, 12,
+                  "eNpjYEAC5msffr81TwnM/v//C5iO+vcfBL6aIQve+f//zIrP///vRRb8/v8vB4PXnj1rGP7DAAPD4f//+yWgBsIFtR7+///3QDIH"
+                  "A8OcOXP+//8NJIEKuBK3//j//54aspkgwNf7//8eZMETVy6JMIj+//8KWXDP///3F9/6//8wsocMP4Jt/GmPLMigPP/xr1drDBgA"
+                  "Zjhtjw=="),
+              's17:-S': (20, 12, 12,
+                  "eNpjYEAA87UPv9+ap4QkwhD17z8IfDVDErvz//+ZFZ///9+LJPb9/18OBq89e9YwzIEAoNjh///7JcCy/yEAyNJ6+P//3wPJHMhi"
+                  "DFyJ23/8/39PjQEV8PX+/78HiX/iyiURBtH//18hie35///+4lv//x9GEjP8CDb5pz2yYcrzH/96tcaAAQDKmlWK"),
+          }
+
+
+          # --------------------------------------------------------------------------------------------
+          # Brushed-metal noise (deterministic: same skin on every build)
+          # --------------------------------------------------------------------------------------------
+          def h01(n):
+              """Integer hash -> 0..1."""
+              n = (int(n) * 0x9E3779B1) & 0xFFFFFFFF
+              n ^= n >> 15
+              n = (n * 0x85EBCA77) & 0xFFFFFFFF
+              n ^= n >> 13
+              return (n & 0xFFFF) / 65535.0
+
+
+          def streak(x, y, seed):
+              """About -1.2 .. +1.2: long thin horizontal brush lines, broken into short runs."""
+              row = h01(int(y) * 977 + seed)
+              run = h01(int(y) * 131 + (int(x) // 41) * 7919 + seed + 5)
+              fine = h01(int(x) * 31 + int(y) * 1009 + seed + 11)
+              return (row - 0.5) * 1.2 + (run - 0.5) * 0.9 + (fine - 0.5) * 0.25
+
+
+          def clamp8(v):
+              return max(0, min(255, int(round(v))))
+
+
+          def shade(c, d):
+              return (clamp8(c[0] + d), clamp8(c[1] + d), clamp8(c[2] + d), c[3])
+
+
+          def brushed(y0, y1, c0, c1, seed, amp=7.0):
+              """Vertical gradient c0 -> c1 with horizontal brushing on top."""
+              base = K.vgrad(y0, y1, c0, c1)
+              return lambda px, py: shade(base(px, py), streak(px, py, seed) * amp)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Drawing overrides (same geometry as the SDK kit, silver surfaces) - identical to the other plugins
+          # --------------------------------------------------------------------------------------------
+          def turned(cx, cy, radius, seed=3):
+              """Turned-aluminium knob face: concentric brush lines and a two-lobed highlight."""
+              light = -0.75 * math.pi
+
+              def f(px, py):
+                  dx, dy = px - cx, py - cy
+                  rad = math.hypot(dx, dy)
+                  lobes = math.cos(2.0 * (math.atan2(dy, dx) - light))
+                  ring = h01(int(rad * 2.4) + seed * 101) - 0.5
+                  fine = h01(int(px * 13) + int(py * 29) * 7 + seed) - 0.5
+                  lum = 188 + 30 * lobes * (0.35 + 0.65 * min(1.0, rad / radius)) + ring * 16 + fine * 4
+                  return (clamp8(lum), clamp8(lum + 1), clamp8(lum + 4), 255)   # a touch cool
+              return f
+
+
+          def knob_static(size, th):
+              c = K.Canvas(size, size)
+              cx = cy = size / 2.0
+              r = size / 2.0
+              ring_out, ring_in = r - 1.0, r - max(4.0, size * 0.1)
+              body_r = ring_in - max(3.0, size * 0.07)
+              K.arc(c, cx, cy, ring_in, ring_out, -K.SWEEP / 2.0, K.SWEEP / 2.0, th["track"])
+              K.circle(c, cx, cy + 1.5, body_r + 1.0, K.with_alpha(th["outline"], 150))
+              K.circle(c, cx, cy, body_r, K.light_rim(cx, cy, th["bodyLight"], th["bodyDark"]))
+              face_r = body_r - max(1.5, size * 0.035)
+              K.circle(c, cx, cy, face_r, turned(cx, cy, face_r))
+              return c, (cx, cy, ring_in, ring_out, body_r, face_r)
+
+
+          def fader_cap(g, th):
+              w, h = g["cap_len"], g["cap_th"]
+              c = K.Canvas(w + 2, h + 4)
+              K.rrect(c, 1, 3, w, h, 5.0, K.with_alpha(th["outline"], 170))
+              K.rrect(c, 1, 1, w, h, 5.0, brushed(1, 1 + h, th["thumbLight"], th["thumbDark"], 23, 6.0))
+              K.rrect_outline(c, 1, 1, w, h, 5.0, 1.0, K.with_alpha(th["outline"], 180))
+              cx = 1 + w / 2.0
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 2.0, th["accentDark"])
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 1.4, th["accent"])
+              return c
+
+
+          def render_button(th, on, w=120, h=44, led=True):
+              """Blue brushed key: deep blue at rest, bright lit blue when selected."""
+              c = K.Canvas(w, h)
+              rad = 8.0
+              K.rrect(c, 1, 3, w - 2, h - 4, rad, K.with_alpha(th["outline"], 150))
+              top, bottom = BTN_ON if on else BTN_OFF
+              K.rrect(c, 1, 1, w - 2, h - 4, rad, brushed(1, h - 3, top, bottom, 17, 6.0))
+              K.rrect_outline(c, 1, 1, w - 2, h - 4, rad, 2.0 if on else 1.0, BTN_EDGE_ON if on else BTN_EDGE_OFF)
+              if on and not led:
+                  K.rrect(c, 10, h - 9, w - 20, 3, 1.5, BTN_EDGE_ON)
+              if led:
+                  lx, ly, lw, lh = 11, (h - 4) / 2.0 + 1 - 9, 6, 18
+                  if on:
+                      K.rrect(c, lx - 3, ly - 3, lw + 6, lh + 6, 6.0, th["accentGlow"])
+                  K.rrect(c, lx, ly, lw, lh, 3.0, BTN_EDGE_ON if on else th["ledOff"])
+              return c.rows(), w
+
+
+          # --------------------------------------------------------------------------------------------
+          # Control layout: one centred row of controls along the top of each page
+          # --------------------------------------------------------------------------------------------
+          GRID_GAP = gen_ui.SLOT_X[1] - gen_ui.SLOT_X[0] - gen_ui.SLOT_W      # the grid's normal gap (42 px)
+          SEG_Y = 46          # top of the segment buttons inside their slot (the SDK uses 54); leaves room for the names below
+
+
+          def slot_positions(page):
+              """[(control index, x, y)] for the controls in use. Each page holds one row of up to four controls."""
+              idx = [i for i, c in enumerate(page.controls) if c.widget != "empty"]
+              total = len(idx) * gen_ui.SLOT_W + max(0, len(idx) - 1) * GRID_GAP
+              x0 = (gen_ui.SCREEN_W - total) // 2
+              return [(i, x0 + j * (gen_ui.SLOT_W + GRID_GAP), TOP_Y) for j, i in enumerate(idx)]
+
+
+          def radio_component(style, overlay_name, n):
+              """gen_ui.radio_component with the segment buttons raised to SEG_Y so their names fit inside the slot."""
+              width, xs = gen_ui.SEGMENTS[n]
+              children = [gen_ui.focus_child(style),
+                          gen_ui.entry("name", "Label", gen_ui.label_data("Name", style["muted"], 24.0), "15 8 248 34",
+                                       "No", "Show", "Always")]
+              for i, x in enumerate(xs):
+                  children.append(gen_ui.entry("seg %d" % i, "Button",
+                                               gen_ui.button_data("seg%d_on.png" % n, "seg%d_off.png" % n, i, n),
+                                               "%d %d %d 40" % (x, SEG_Y, width), "No", "Show", "Always"))
+              return gen_ui.component_definition(gen_ui.control_actions(overlay_name, double_click=False), children,
+                                                 "00000000")
+
+
+          PARAMS = None       # gen_ui.ParamTable, set in main()
+
+
+          def handle(name):
+              return PARAMS.lookup(name, "make_silver").handle
+
+
+          def tab_component(page, style):
+              """The page's controls (no on-button caption labels: the names are painted in the background),
+              plus the page's meters."""
+              children = []
+              for i, x, y in slot_positions(page):
+                  ctl = page.controls[i]
+                  bounds = "%d %d %d %d" % (x, y, gen_ui.SLOT_W, gen_ui.SLOT_H)
+                  children.append(gen_ui.entry(ctl.param.name, ctl.definition,
+                                               gen_ui.obj(("version", 1), ("handleName", "Data")), bounds,
+                                               "Yes", "Hide", "Always", remap=[("Data", ctl.param.handle)]))
+              if page.name == "SPECTRUM":
+                  children += spectrum_entries()
+              elif page.name == "STEREO":
+                  children += stereo_entries()
+              return gen_ui.component_definition([], children, style["background"], bg_image=page.background)
+
+
+          def qlink_rects(page, groups="columns"):
+              """One Q-Link rectangle around the page's row of controls."""
+              pos = [(x, y) for i, x, y in slot_positions(page) if page.controls[i].param is not None]
+              if not pos:
+                  return []
+              pad = gen_ui.QLINK_PAD
+              x = max(min(p[0] for p in pos) - pad, 2)
+              y = max(pos[0][1] - pad, 2)
+              x2 = min(max(p[0] for p in pos) + gen_ui.SLOT_W + pad, gen_ui.SCREEN_W - 2)
+              y2 = min(pos[0][1] + gen_ui.SLOT_H + pad, gen_ui.SCREEN_H - 2)
+              return ["%d %d %d %d" % (x, y, x2 - x, y2 - y)]
+
+
+          _orig_build_qlinks = gen_ui.build_qlinks
+          CONTROLS = ("Source", "Response", "Slope", "Cursor", "Scope Gain", "Persistence", "Refresh")
+
+
+          def build_qlinks(pages, params, groups="columns"):
+              """As gen_ui, but in Program Mode the knobs only reach the controls (never the read-only readings)."""
+              q = _orig_build_qlinks(pages, params, groups)
+              idx = [int(handle(n).split()[-1]) for n in CONTROLS]
+              for i, (k, _v) in enumerate(q):
+                  if k == "Program Mode Q-Links":
+                      q[i] = (k, gen_ui.Obj(("Q-Link %d" % (n + 1), idx[n] if n < len(idx) else -1) for n in range(16)))
+              return q
+
+
+          # --------------------------------------------------------------------------------------------
+          # Page widgets
+          # --------------------------------------------------------------------------------------------
+          def rect(x, y, w, h):
+              return "%d %d %d %d" % (x, y, w, h)
+
+
+          def text_style(colour, height, style="Regular", just="left verticallyCentred"):
+              return gen_ui.obj(("version", 1),
+                                ("font", gen_ui.obj(("version", 1), ("name", gen_ui.FONT_NAME), ("style", style),
+                                                    ("height", float(height)))),
+                                ("colour", colour), ("justification", just), ("case", "Original"))
+
+
+          def label(name, kind, hname, bounds, colour, height, style="Regular", just="left verticallyCentred",
+                    text=None, visible=None):
+              """A Label bound straight to a handle (kind Name / Value), or fixed text (kind Text).
+              visible: an extra handle (e.g. IndexedEnabling/...) that hides the label while it is invalid."""
+              pairs = [("version", 1), ("textStyle", text_style(colour, height, style, just)), ("type", kind),
+                       ("handleName", hname)]
+              if text is not None:
+                  pairs.append(("text", text))
+              return gen_ui.entry(name, "Label", gen_ui.Obj(pairs), bounds, "No", "Hide" if visible else "Show", "Always",
+                                  invalidating=[visible] if visible else None)
+
+
+          def filmstrip(name, image, frames, hname, bounds, visible=None):
+              data = gen_ui.obj(("version", 2), ("imageType", "FilmStrip"), ("colour", "0"), ("image", image),
+                                ("numFrames", frames), ("handleName", hname))
+              return gen_ui.entry(name, "Image", data, bounds, "No", "Show", "Always",
+                                  invalidating=[visible] if visible else None)
+
+
+          def picture(name, image, bounds):
+              data = gen_ui.obj(("version", 2), ("imageType", "Regular"), ("colour", "0"), ("image", image))
+              return gen_ui.entry(name, "Image", data, bounds, "No", "Show", "Always")
+
+
+          def cursor_slider(bounds):
+              """The cursor line: a TrackAndThumb slider bound to Cursor (a log parameter, so its normalised value
+              is the position on the log frequency axis). Touching the plot moves the cursor."""
+              data = gen_ui.obj(("version", 3), ("sliderType", "TrackAndThumb"), ("direction", "Horizontal"),
+                                ("thumbImage", "am_cursor.png"), ("thumbTrackVisible", False), ("revealedImage", ""),
+                                ("handleName", "Data"))
+              return gen_ui.entry("cursor line", "Slider", data, bounds, "No", "Show", "Always",
+                                  remap=[("Data", handle("Cursor"))])
+
+
+          def spectrum_entries():
+              e = []
+              for c in range(CURVE_COLS):
+                  e.append(filmstrip("curve %d" % (c + 1), "am_column.png", CURVE_H + 1, handle("Curve %d" % (c + 1)),
+                                     rect(PLOT_X + c * COL_W, PLOT_Y, COL_W, CURVE_H)))
+              # the thumb's centre travels from half a thumb inside each end, so the bounds reach half a thumb out
+              e.append(cursor_slider(rect(PLOT_X - CURSOR_W // 2 - 1, PLOT_Y, PLOT_W + CURSOR_W + 1, CURVE_H)))
+
+              # readouts under the plot
+              x, y, w, h = CUR_BOX
+              e.append(label("cursor title", "Text", "Data", rect(x + 16, y + 8, 160, 26), LCD_MUTED, 20, "SemiBold",
+                             text="CURSOR"))
+              e.append(label("cursor freq", "Value", handle("Cursor"), rect(x + w - 216, y + 8, 200, 26), LCD_TEXT, 22,
+                             "SemiBold", "right verticallyCentred"))
+              e.append(label("cursor level", "Value", handle("Cursor Level"), rect(x + 10, y + 40, w - 20, 92), LCD_TEXT,
+                             64, "SemiBold", "horizontallyCentred verticallyCentred"))
+              x, y, w, h = PEAK_BOX
+              e.append(label("peak title", "Text", "Data", rect(x + 16, y + 8, 160, 26), LCD_MUTED, 20, "SemiBold",
+                             text="PEAK"))
+              e.append(label("peak level", "Value", handle("Peak Level"), rect(x + w - 216, y + 8, 200, 26), LCD_TEXT, 22,
+                             "SemiBold", "right verticallyCentred"))
+              e.append(label("peak freq", "Value", handle("Peak Freq"), rect(x + 10, y + 40, w - 20, 92), LCD_TEXT, 40,
+                             "SemiBold", "horizontallyCentred verticallyCentred"))
+              return e
+
+
+          def bar_rect(panel_box, segs, pitch):
+              px, py, pw, _ = panel_box
+              w = segs * pitch
+              return rect(px + (pw - w) // 2, py + 40, w, BAR_H)
+
+
+          def stereo_entries():
+              e = []
+              for c in range(SC_COLS):
+                  x = SC_X + c * SC_COL_W
+                  e.append(filmstrip("scope up %d" % (c + 1), "am_scope_up.png", SC_FRAMES, handle("Scope Up %d" % (c + 1)),
+                                     rect(x, SC_Y, SC_COL_W, SC_HALF)))
+                  e.append(filmstrip("scope dn %d" % (c + 1), "am_scope_dn.png", SC_FRAMES, handle("Scope Dn %d" % (c + 1)),
+                                     rect(x, SC_Y + SC_HALF, SC_COL_W, SC_HALF)))
+              # correlation
+              x, y, w, h = CORR_P
+              e.append(label("corr title", "Text", "Data", rect(x + 16, y + 6, 260, 26), LCD_MUTED, 20, "SemiBold",
+                             text="PHASE CORRELATION"))
+              e.append(label("corr value", "Value", handle("Correlation"), rect(x + w - 156, y + 6, 140, 26), LCD_TEXT, 22,
+                             "SemiBold", "right verticallyCentred"))
+              e.append(filmstrip("corr bar", "am_corr.png", CORR_FRAMES, handle("Correlation"),
+                                 bar_rect(CORR_P, CORR_SEGS, CORR_PITCH)))
+              # balance
+              x, y, w, h = BAL_P
+              e.append(label("bal title", "Text", "Data", rect(x + 16, y + 6, 260, 26), LCD_MUTED, 20, "SemiBold",
+                             text="BALANCE"))
+              e.append(label("bal value", "Value", handle("Balance"), rect(x + w - 156, y + 6, 140, 26), LCD_TEXT, 22,
+                             "SemiBold", "right verticallyCentred"))
+              e.append(filmstrip("bal bar", "am_balance.png", BAL_FRAMES, handle("Balance"),
+                                 bar_rect(BAL_P, BAL_SEGS, BAL_PITCH)))
+              # readings
+              x, y, w, h = INFO_P
+              cw = (w - 32) // 2
+              for col, name in enumerate(("Side / Mid", "Scope Level")):
+                  cx = x + 16 + col * cw
+                  hd = handle(name)
+                  e.append(label(name + " name", "Name", hd, rect(cx + 8, y + 12, cw - 16, 24), INK_MUTED, 20))
+                  e.append(label(name + " value", "Value", hd, rect(cx + 8, y + 38, cw - 16, 40), INK, 32, "SemiBold"))
+              return e
+
+
+          # --------------------------------------------------------------------------------------------
+          # Images
+          # --------------------------------------------------------------------------------------------
+          # --------------------------------------------------------------------------------------------
+          # Images
+          # --------------------------------------------------------------------------------------------
+          def write_png_rgba(path, width, rows):
+              def chunk(tag, data):
+                  body = tag + data
+                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+              raw = b"".join(b"\0" + bytes(r) for r in rows)
+              png = b"\x89PNG\r\n\x1a\n"
+              png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, len(rows), 8, 6, 0, 0, 0))
+              png += chunk(b"IDAT", zlib.compress(raw, 9))
+              png += chunk(b"IEND", b"")
+              with open(path, "wb") as f:
+                  f.write(png)
+
+
+          def canvas_rows(c):
+              return [bytearray(r) for r in c.rows()]
+
+
+          def make_column_strip(path):
+              """CURVE_H + 1 frames of one spectrum column: frame k = filled k px from the bottom, translucent blue
+              (stronger towards the top of the plot) with a 2 px bright edge on top. All 160 columns share it."""
+              w, h = COL_W, CURVE_H
+              fill = []
+              for y in range(h):
+                  a = 0.16 + 0.42 * (1.0 - y / float(h - 1))          # top of the plot 0.58, bottom 0.16
+                  fill.append(bytes(TRACE + (clamp8(a * 255),)) * w)
+              edge = bytes(TRACE_HI + (255,)) * w
+              under = bytes((120, 182, 255, 235)) * w
+              empty = bytes(w * 4)
+              rows = []
+              for k in range(h + 1):
+                  top = h - k
+                  for y in range(h):
+                      if y < top:
+                          rows.append(empty)
+                      elif y == top:
+                          rows.append(edge)
+                      elif y == top + 1:
+                          rows.append(under if k >= 3 else edge)
+                      else:
+                          rows.append(fill[y])
+              write_png_rgba(path, w, rows)
+
+
+          def make_cursor(path):
+              """The cursor line (Slider thumb): a 1 px amber line down the plot with a small marker at the top."""
+              w, h = CURSOR_W, CURVE_H
+              c = K.Canvas(w, h)
+              cx = w // 2
+              K.rrect(c, cx - 1, 0, 3, h, 0.0, CURSOR_COL + (60,))
+              K.rrect(c, cx, 0, 1, h, 0.0, CURSOR_COL + (230,))
+              for y in range(6):                                   # small downward triangle
+                  half = (6 - y) * 0.75
+                  K.rrect(c, cx + 0.5 - half, y, 2 * half, 1, 0.0, CURSOR_COL + (255,))
+              write_png_rgba(path, w, c.rows())
+
+
+          def span_rows(lo, hi, flip):
+              """One scope column (SC_COL_W x SC_HALF) with rows lo .. hi lit (row 0 next to the centre line)."""
+              w, h = SC_COL_W, SC_HALF
+              c = K.Canvas(w, h)
+              if lo >= 0:
+                  y0, y1 = h - (hi + 1) * SC_ROW_H, h - lo * SC_ROW_H          # upper half: centre at the bottom
+                  if flip:
+                      y0, y1 = lo * SC_ROW_H, (hi + 1) * SC_ROW_H              # lower half: centre at the top
+                  K.rrect(c, 0, y0, w, y1 - y0, 3.0, TRACE + (110,))                         # glow (joins the neighbours)
+                  K.rrect(c, 1, y0 + 1, w - 2, y1 - y0 - 2, 2.5, TRACE + (255,))             # trace
+                  K.rrect(c, 2.5, y0 + 2.5, w - 5, y1 - y0 - 5, 1.5, TRACE_HI + (255,))      # bright core
+              return c.rows()
+
+
+          def make_scope_strip(path, flip):
+              """SC_FRAMES frames: 0 = nothing; 1 + hi * (hi + 1) / 2 + lo = rows lo .. hi lit (same code as the plugin)."""
+              rows = list(span_rows(-1, -1, flip))
+              for hi in range(SC_ROWS):
+                  for lo in range(hi + 1):
+                      rows += span_rows(lo, hi, flip)
+              write_png_rgba(path, SC_COL_W, rows)
+
+
+          def corr_colour(centre, lit):
+              """Correlation segment colour: red when out of phase (< 0), blue when in phase."""
+              if centre < 0:
+                  on, off = (255, 66, 58), (74, 28, 28)
+              else:
+                  on, off = (70, 150, 255), (28, 44, 74)
+              return (on if lit else off) + (255,)
+
+
+          def bal_colour(centre, lit):
+              """Balance segment colour: blue within 3 dB of the centre, amber to 12 dB, red beyond."""
+              a = abs(centre)
+              if a > 12:
+                  on, off = (255, 66, 58), (74, 28, 28)
+              elif a > 3:
+                  on, off = (255, 186, 40), (78, 62, 26)
+              else:
+                  on, off = (70, 150, 255), (28, 44, 74)
+              return (on if lit else off) + (255,)
+
+
+          def make_centre_bar(path, segs, pitch, lit_w, frames, lo_v, hi_v, colour):
+              """frames for lo_v .. hi_v: segments lit from the centre (0) out to the value, plus a white marker."""
+              w, h = segs * pitch, BAR_H
+              rows = []
+              for k in range(frames):
+                  v = lo_v + (hi_v - lo_v) * k / (frames - 1)
+                  c = K.Canvas(w, h)
+                  lo, hi = min(0.0, v), max(0.0, v)
+                  for i in range(segs):
+                      s0 = lo_v + (hi_v - lo_v) * i / segs
+                      s1 = s0 + (hi_v - lo_v) / segs
+                      lit = s1 > lo + 1e-9 and s0 < hi - 1e-9
+                      K.rrect(c, i * pitch + (pitch - lit_w) / 2.0, 3, lit_w, h - 6, 1.0, colour((s0 + s1) / 2.0, lit))
+                  mx = (v - lo_v) / (hi_v - lo_v) * w
+                  K.rrect(c, min(max(mx - 2.0, 0.0), w - 4.0), 0, 4, h, 1.5, (245, 248, 255, 255))
+                  rows += c.rows()
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Page background: brushed aluminium, 1280 x 628 (the tab area, drawn 1:1), logo, title, captions
+          # --------------------------------------------------------------------------------------------
+          def draw_logo():
+              """The invader on a black plate (a canvas with room for the drop shadow), LOGO_PLATE px square.
+              Cell geometry is measured from the supplied 512 px logo and scaled."""
+              s = LOGO_PLATE / 512.0
+              pad, size = 6, LOGO_PLATE
+              c = K.Canvas(size + 2 * pad, size + 2 * pad)
+              rad = size * 0.11
+              K.rrect(c, pad, pad + 3, size, size, rad, (0, 0, 0, 110))
+              K.rrect(c, pad, pad, size, size, rad, K.vgrad(pad, pad + size, (24, 25, 28, 255), (2, 2, 3, 255)))
+              K.rrect_outline(c, pad, pad, size, size, rad, 1.0, (112, 116, 124, 255))
+              for r, line in enumerate(LOGO):
+                  for col, ch in enumerate(line):
+                      if ch == "#":
+                          K.rrect(c, pad + (85 + 43.57 * col) * s, pad + (99 + 43.0 * r) * s, 37 * s, 37 * s, 1.0,
+                                  (248, 250, 253, 255))
+              return c, pad
+
+
+          def blend_canvas(rows, canvas, x0, y0):
+              for y in range(canvas.h):
+                  if not 0 <= y0 + y < len(rows):
+                      continue
+                  row = rows[y0 + y]
+                  for x in range(canvas.w):
+                      r, g, b, a = canvas.px[y * canvas.w + x]
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + x) * 4
+                      row[i] = clamp8(row[i] + (r - row[i]) * a)
+                      row[i + 1] = clamp8(row[i + 1] + (g - row[i + 1]) * a)
+                      row[i + 2] = clamp8(row[i + 2] + (b - row[i + 2]) * a)
+
+
+          def text_size(name):
+              w, h, baseline, _ = TEXT_MASKS[name]
+              return w, h, baseline
+
+
+          def blend_text(rows, name, x0, y0, colour, alpha_rows=False):
+              """Paint a pre-rendered mask. alpha_rows: the target is transparent, so write colour + alpha."""
+              w, h, _baseline, packed = TEXT_MASKS[name]
+              alpha = zlib.decompress(base64.b64decode(packed))
+              for yy in range(h):
+                  if not 0 <= y0 + yy < len(rows):
+                      continue
+                  row = rows[y0 + yy]
+                  for xx in range(w):
+                      a = alpha[yy * w + xx] / 255.0
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + xx) * 4
+                      if alpha_rows:
+                          row[i], row[i + 1], row[i + 2] = colour[0], colour[1], colour[2]
+                          row[i + 3] = max(row[i + 3], clamp8(a * 255))
+                      else:
+                          for k in range(3):
+                              row[i + k] = clamp8(row[i + k] + (colour[k] - row[i + k]) * a)
+
+
+          def text_at(rows, key, cx, baseline_y, colour, align="centre"):
+              w, _h, b = text_size(key)
+              x = int(round(cx - w / 2.0)) if align == "centre" else (int(round(cx - w)) if align == "right" else int(cx))
+              blend_text(rows, key, x, int(round(baseline_y)) - b, colour)
+
+
+          def fill_rows(rows, x, y, w, h, colour):
+              for yy in range(max(0, y), min(len(rows), y + h)):
+                  row = rows[yy]
+                  for xx in range(max(0, x), min(len(row) // 4, x + w)):
+                      i = xx * 4
+                      row[i], row[i + 1], row[i + 2] = colour[0], colour[1], colour[2]
+
+
+          def panel(rows, box, fill, radius=12.0, bezel=True):
+              """A recessed panel: dark bevel + shadow, then the face."""
+              x, y, w, h = box
+              c = K.Canvas(w + 8, h + 8)
+              K.rrect(c, 3, 5, w, h, radius + 1, (0, 0, 0, 70))                 # shadow
+              if bezel:
+                  K.rrect(c, 4, 4, w, h, radius, K.vgrad(4, 4 + h, (96, 100, 108, 255), (236, 238, 242, 255)))
+                  K.rrect(c, 6, 6, w - 4, h - 4, radius - 2, fill)
+              else:
+                  K.rrect(c, 4, 4, w, h, radius, fill)
+              blend_canvas(rows, c, x - 4, y - 4)
+
+
+          def brushed_rows(w, h, seed):
+              base = K.parse_argb(SILVER_GREYS["bg"])
+              amp = 7.0
+              sheen = [7 * math.sin(x / 190.0 + 0.6) + 4 * math.sin(x / 53.0) + 5 * math.sin(x / 611.0) for x in range(w)]
+              runs = w // 41 + 2
+              rows = []
+              for y in range(h):
+                  fall = -((y / float(h)) - 0.5) * 8.0                  # slightly lighter at the top
+                  row_n = (h01(y * 977 + seed) - 0.5) * 1.2 * amp
+                  run_n = [(h01(y * 131 + k * 7919 + seed + 5) - 0.5) * 0.9 * amp for k in range(runs)]
+                  row = bytearray(w * 4)
+                  for x in range(w):
+                      fine = (h01(x * 31 + y * 1009 + seed + 11) - 0.5) * 0.25 * amp
+                      d = sheen[x] + fall + row_n + run_n[x // 41] + fine
+                      i = x * 4
+                      row[i] = clamp8(base[0] + d)
+                      row[i + 1] = clamp8(base[1] + d)
+                      row[i + 2] = clamp8(base[2] + d * 1.05)
+                      row[i + 3] = 255
+                  rows.append(row)
+              return rows
+
+
+          def caption_spots(page):
+              """[(text key, centre x, baseline y)] for the names under every segmented choice switch."""
+              spots = []
+              pos = {i: (x, y) for i, x, y in slot_positions(page)}
+              for i, ctl in enumerate(page.controls):
+                  if ctl.widget == "empty" or not ctl.definition.startswith("radio"):
+                      continue
+                  x0, y0 = pos[i]
+                  width, xs = gen_ui.SEGMENTS[len(ctl.param.choices)]
+                  for choice, x in zip(ctl.param.choices, xs):
+                      spots.append(("cap:" + CAPTIONS.get(choice, choice.upper()), x0 + x + width / 2.0, y0 + SEG_Y + 56))
+              return spots
+
+
+          def draw_logo_and_title(rows, w, h):
+              logo, pad = draw_logo()
+              plate_x = w - LOGO_MARGIN - LOGO_PLATE
+              plate_y = h - LOGO_MARGIN - LOGO_PLATE
+              blend_canvas(rows, logo, plate_x - pad, plate_y - pad)
+              # title, to the left of the logo, its baseline level with the bottom of the invader artwork
+              tw, th, tb = text_size("title")
+              art_bottom = plate_y + int(round((99 + 43.0 * (len(LOGO) - 1) + 37) * LOGO_PLATE / 512.0))
+              blend_text(rows, "title", plate_x - TITLE_GAP - tw, art_bottom - tb, TEXT_BLACK)
+
+
+          def draw_captions(rows, page):
+              for key, cx, baseline_y in caption_spots(page):
+                  if key not in TEXT_MASKS:
+                      print('make_silver: no pre-rendered text for "%s"; that button name is not drawn.' % key)
+                      continue
+                  text_at(rows, key, cx, baseline_y, TEXT_BLACK)
+
+
+          def x_of_freq(f):
+              return PLOT_X + math.log(f / F_LO) / math.log(F_HI / F_LO) * PLOT_W
+
+
+          def y_of_db(db):
+              return PLOT_Y + (DB_HI - db) / (DB_HI - DB_LO) * CURVE_H
+
+
+          def draw_spectrum_panel(rows):
+              panel(rows, SPEC, LCD + (255,))
+              fill_rows(rows, PLOT_X - 1, PLOT_Y - 1, PLOT_W + 2, CURVE_H + 2, (10, 12, 16))
+              # horizontal lines every 6 dB, labelled every 12 dB (and +6)
+              db = DB_HI
+              while db >= DB_LO - 0.01:
+                  y = int(round(y_of_db(db)))
+                  major = int(db) % 12 == 0 or db == DB_HI
+                  col = (88, 58, 58) if db == 0 else ((44, 54, 72) if major else (28, 34, 46))
+                  fill_rows(rows, PLOT_X, min(y, PLOT_Y + CURVE_H - 1), PLOT_W, 1, col)
+                  if major and db > DB_LO:
+                      key = "s13:" + ("+6" if db > 0 else str(int(db)))
+                      text_at(rows, key, PLOT_X - 10, y + 5, (255, 120, 110) if db > 0 else (170, 180, 196), "right")
+                  db -= 6.0
+              text_at(rows, "s13:dB", PLOT_X - 34, PLOT_Y + CURVE_H + 22, (120, 132, 150), "right")
+              # vertical lines: 1-2-3..9 per decade, labelled at 20, 50, 100, 200, 500, 1k, 2k, 5k, 10k, 20k
+              labels = {20: "20", 50: "50", 100: "100", 200: "200", 500: "500", 1000: "1k", 2000: "2k", 5000: "5k",
+                        10000: "10k", 20000: "20k"}
+              for dec in (10, 100, 1000, 10000):
+                  for m in range(1, 10):
+                      f = dec * m
+                      if f < F_LO or f > F_HI:
+                          continue
+                      x = int(round(x_of_freq(f)))
+                      major = m == 1
+                      col = (50, 62, 82) if major else ((38, 46, 62) if f in labels else (26, 32, 43))
+                      fill_rows(rows, min(x, PLOT_X + PLOT_W - 1), PLOT_Y, 1, CURVE_H, col)
+                      if f in labels:
+                          fill_rows(rows, min(x, PLOT_X + PLOT_W - 1), PLOT_Y + CURVE_H, 1, 5, (120, 132, 150))
+                          tx = min(max(x, PLOT_X + 10), PLOT_X + PLOT_W - 12)
+                          text_at(rows, "s13:" + labels[f], tx, PLOT_Y + CURVE_H + 22, (170, 180, 196))
+              text_at(rows, "s13:Hz", PLOT_X + PLOT_W + 22, PLOT_Y + CURVE_H + 22, (120, 132, 150))
+              panel(rows, CUR_BOX, LCD + (255,))
+              panel(rows, PEAK_BOX, LCD + (255,))
+
+
+          def line_rows(rows, x0, y0, x1, y1, colour, dash=0):
+              """1 px line (no anti-aliasing), optionally dashed."""
+              n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+              for i in range(n):
+                  if dash and (i // dash) % 2:
+                      continue
+                  t = i / float(max(1, n - 1))
+                  x, y = int(round(x0 + (x1 - x0) * t)), int(round(y0 + (y1 - y0) * t))
+                  fill_rows(rows, x, y, 1, 1, colour)
+
+
+          def draw_stereo_panel(rows):
+              panel(rows, SCOPE, LCD + (255,))
+              fill_rows(rows, SC_X - 1, SC_Y - 1, SC_W + 2, 2 * SC_HALF + 2, (10, 12, 16))
+              cx, cy = SC_X + SC_W / 2.0, SC_Y + SC_HALF
+              rx, ry = SC_W / 2.0, float(SC_HALF)
+
+              def at(s, m):
+                  return cx + s * rx, cy - m * ry
+              # half-scale diamond, axes, L / R lines, full-scale diamond
+              pts = [at(0, 0.5), at(0.5, 0), at(0, -0.5), at(-0.5, 0), at(0, 0.5)]
+              for a, b in zip(pts, pts[1:]):
+                  line_rows(rows, a[0], a[1], b[0], b[1], (30, 38, 52), dash=4)
+              line_rows(rows, cx, SC_Y, cx, SC_Y + 2 * SC_HALF - 1, (40, 50, 68))
+              line_rows(rows, SC_X, cy, SC_X + SC_W - 1, cy, (40, 50, 68))
+              for s in (-1, 1):
+                  a, b = at(-0.5 * s, 0.5), at(0.5 * s, -0.5)
+                  line_rows(rows, a[0], a[1], b[0], b[1], (36, 46, 64), dash=6)
+              pts = [at(0, 1), at(1, 0), at(0, -1), at(-1, 0), at(0, 1)]
+              for a, b in zip(pts, pts[1:]):
+                  line_rows(rows, a[0], a[1], b[0], b[1], (70, 90, 122))
+              col = (143, 180, 240)
+              lx, ly = at(-0.5, 0.5)
+              text_at(rows, "s17:L", lx - 16, ly - 10, col)
+              rx_, ry_ = at(0.5, 0.5)
+              text_at(rows, "s17:R", rx_ + 16, ry_ - 10, col)
+              mx, my = at(0, 1)
+              text_at(rows, "s17:M", mx + 22, my + 20, col)
+              text_at(rows, "s17:-S", SC_X + 22, cy - 10, col)
+              text_at(rows, "s17:+S", SC_X + SC_W - 24, cy - 10, col)
+              # correlation and balance panels with their scales
+              for box, segs, pitch, marks in (
+                      (CORR_P, CORR_SEGS, CORR_PITCH, ((-1.0, "-1"), (-0.5, "-0.5"), (0.0, "0"), (0.5, "+0.5"), (1.0, "+1"))),
+                      (BAL_P, BAL_SEGS, BAL_PITCH, ((-1.0, "L 24"), (-0.5, "12"), (0.0, "C"), (0.5, "12"), (1.0, "R 24")))):
+                  panel(rows, box, LCD + (255,))
+                  px, py, pw, _ = box
+                  w = segs * pitch
+                  x0 = px + (pw - w) // 2
+                  ybar = py + 40
+                  fill_rows(rows, x0 - 2, ybar - 2, w + 4, BAR_H + 4, (8, 9, 12))
+                  for v, key in marks:
+                      x = int(round(x0 + (v + 1.0) / 2.0 * w))
+                      colour = (255, 120, 110) if (box is CORR_P and v < 0) else (170, 180, 196)
+                      fill_rows(rows, min(x, x0 + w - 1), ybar + BAR_H + 2, 1, 4, colour)
+                      text_at(rows, "s13:" + key, min(max(x, x0 + 14), x0 + w - 14), ybar + BAR_H + 18, colour)
+              # readings panel (light, like Utility Meter's)
+              x, y, w, h = INFO_P
+              panel(rows, INFO_P, K.vgrad(y, y + h, (214, 217, 222, 255), (196, 199, 205, 255)), 12.0)
+              fill_rows(rows, x + w // 2, y + 14, 1, h - 28, (160, 164, 172))
+              fill_rows(rows, x + w // 2 + 1, y + 14, 1, h - 28, (232, 234, 238))
+
+
+          def make_background(path, page, w=1280, h=628, seed=41):
+              rows = brushed_rows(w, h, seed)
+              if page.name == "SPECTRUM":
+                  draw_spectrum_panel(rows)
+              elif page.name == "STEREO":
+                  draw_stereo_panel(rows)
+              draw_logo_and_title(rows, w, h)
+              draw_captions(rows, page)
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          # The double-tap / Enter overlays (KnobOverlay, MenuOverlay) are full-screen components whose background
+          # gen_ui sets to the page colour; on the MPC that made them near-white. Keep them on the SDK's dark colour.
+          OVERLAY_BG = "ff1e1d1e"
+
+
+          def install_theme():
+              _overlay_component = gen_ui.overlay_component
+              gen_ui.overlay_component = lambda type_name, data, _bg: _overlay_component(type_name, data, OVERLAY_BG)
+              gen_ui.tab_component = tab_component
+              gen_ui.radio_component = radio_component
+              gen_ui.qlink_rects = qlink_rects
+              gen_ui.build_qlinks = build_qlinks
+              K.GREYS.update(SILVER_GREYS)
+              K.THEMES["silver"] = ACCENT
+              K.knob_static = knob_static
+              K.fader_cap = fader_cap
+              K.render_button = render_button
+
+
+          def main(argv):
+              global PARAMS
+              install_theme()
+              params = os.path.join(HERE, "build", "params.json")
+              ui = os.path.join(HERE, "ui.json")
+              out = os.path.join(HERE, "skins")
+              if not os.path.isfile(params):
+                  print("make_silver: build/params.json is missing. Run first:\n"
+                        '  python tools/build.py "plugins/Analysis Meter" --target native')
+                  return 1
+              if os.path.isdir(out):
+                  shutil.rmtree(out)
+              os.makedirs(out)
+              PARAMS = gen_ui.ParamTable(gen_ui.load_params(params))
+              pages = gen_ui.load_ui(ui, PARAMS)[0]
+              for page in pages:
+                  make_background(os.path.join(out, page.background), page)
+              make_column_strip(os.path.join(out, "am_column.png"))
+              make_cursor(os.path.join(out, "am_cursor.png"))
+              make_scope_strip(os.path.join(out, "am_scope_up.png"), False)
+              make_scope_strip(os.path.join(out, "am_scope_dn.png"), True)
+              make_centre_bar(os.path.join(out, "am_corr.png"), CORR_SEGS, CORR_PITCH, CORR_LIT, CORR_FRAMES, -1.0, 1.0,
+                              corr_colour)
+              make_centre_bar(os.path.join(out, "am_balance.png"), BAL_SEGS, BAL_PITCH, BAL_LIT, BAL_FRAMES, -24.0, 24.0,
+                              bal_colour)
+              gen_ui.generate(params, ui, out, assets_dir=out, quiet=False, kit_cache=None)
+              print("make_silver: wrote %s (%d files)" % (out, len(os.listdir(out))))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          AMEOF
+      - name: First build (native) to list the parameters
+        run: python tools/build.py "plugins/Analysis Meter" --target native
+      - name: Draw the brushed silver skin
+        run: python "plugins/Analysis Meter/make_silver.py"
+      - name: Build, validate, make MPC folder
+        run: python tools/build.py "plugins/Analysis Meter"
+      - name: Upload MPC plugin folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Analysis-Meter-MPC
+          path: plugins/Analysis Meter/build/*VST*
+          if-no-files-found: error
