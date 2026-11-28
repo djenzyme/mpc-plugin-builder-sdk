@@ -1,0 +1,955 @@
+name: Build Sync Filter
+
+# One-file setup: this workflow writes the whole Sync Filter project (code, UI layout and the
+# brushed silver skin generator, which also paints the logo, title and Mode button names) into
+# plugins/Sync Filter/ on the build server, then builds and validates it.
+# Sync Filter was called Sweep Filter up to 1.1.1; the uid (GZsr), parameters and programs are unchanged.
+# To change the plugin later, edit the file contents below.
+
+on:
+  push:
+  workflow_dispatch:   # lets you press "Run workflow" from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Write plugin files
+        run: |
+          set -e
+          mkdir -p "plugins/Sync Filter"
+          cd "plugins/Sync Filter"
+          mkdir -p "$(dirname "plugin.json")"
+          cat > "plugin.json" <<'SYNCEOF'
+          {
+            "name": "Sync Filter",
+            "manufacturer": "gltchsqnz",
+            "version": "1.2.1",
+            "format": "vst2",
+            "kind": "effect",
+            "uid": "GZsr",
+            "numInputs": 2,
+            "numOutputs": 2,
+            "category": "Effect",
+            "shortName": "Sync Filter",
+            "knobs": [
+              {
+                "parameter": 2,
+                "label": "Cutoff"
+              },
+              {
+                "parameter": 4,
+                "label": "Depth"
+              },
+              {
+                "parameter": 5,
+                "label": "Rate"
+              }
+            ],
+            "shiftKnobs": [
+              {
+                "parameter": 3,
+                "label": "Reso"
+              },
+              {
+                "parameter": 8,
+                "label": "Mix"
+              },
+              {
+                "parameter": 6,
+                "label": "Shape"
+              }
+            ],
+            "file32": "VST/sync-filter-arm32.so",
+            "file64": "VST/sync-filter-arm64.so",
+            "description": "Tempo-synced auto filter. An LFO sweeps an LP/BP/HP/Notch filter, locked to the song position with cycles from 1/16 note up to 64 bars.",
+            "author": "gltchsqnz",
+            "url": "",
+            "license": "MIT"
+          }
+          SYNCEOF
+          mkdir -p "$(dirname "ui.json")"
+          cat > "ui.json" <<'SYNCEOF'
+          {
+            "kit": "silver",
+            "qlinkGroups": "rows",
+            "pages": [
+              {
+                "name": "SWEEP",
+                "controls": [
+                  {
+                    "param": "Rate",
+                    "widget": "knob",
+                    "overlay": "menu"
+                  },
+                  {
+                    "param": "Depth",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Shape",
+                    "widget": "knob",
+                    "overlay": "menu"
+                  },
+                  {
+                    "param": "Phase",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Cutoff",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Reso",
+                    "widget": "knob"
+                  },
+                  {
+                    "param": "Mode",
+                    "widget": "switch"
+                  },
+                  "empty",
+                  {
+                    "param": "Mix",
+                    "widget": "fader"
+                  },
+                  {
+                    "param": "Level",
+                    "widget": "fader"
+                  },
+                  "empty",
+                  "empty"
+                ],
+                "background": "silver_bg.png"
+              }
+            ],
+            "style": {
+              "background": "ffc4c7cd",
+              "text": "ff16181b",
+              "muted": "ff3d4148"
+            }
+          }
+          SYNCEOF
+          mkdir -p "$(dirname "README.md")"
+          cat > "README.md" <<'SYNCEOF'
+          # Sync Filter
+
+          (Released as Sweep Filter up to 1.1.1. Renamed to Sync Filter in 1.2.0; the uid, parameters and programs
+          are unchanged.)
+
+          A tempo-synced auto filter for Akai MPC standalone, by gltchsqnz.
+
+          An LFO sweeps the cutoff of a stereo state-variable filter. The LFO cycle can be
+          anything from a 1/16 note up to **64 bars**, and while the MPC is playing it is
+          locked to the song position, so long sweeps stay in time across loops, jumps and
+          mid-song starts.
+
+          ## Parameters
+
+          | # | Name | What it does |
+          |---|------|--------------|
+          | 0 | Level | Output volume, -24 to +12 dB |
+          | 1 | Mode | LP / BP / HP, or Notch |
+          | 2 | Cutoff | Centre frequency of the sweep, 40 Hz to 16 kHz |
+          | 3 | Reso | Resonance, 0 to 100 % |
+          | 4 | Depth | Sweep width; 100 % = +/- 4 octaves around Cutoff |
+          | 5 | Rate | Cycle length: 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8, 16, 32, 64 bars |
+          | 6 | Shape | Sine, Triangle, Saw Up, Saw Down, Square |
+          | 7 | Phase | Shifts the sweep within its cycle |
+          | 8 | Mix | Dry/wet |
+
+          Programs: Epic Rise (64 bars), Slow Rise (32), Long Sweep (16), Wobble (1/8),
+          Bar Gate (1 bar, band-pass square), Phaser Ish (4 bars, notch, 60 % mix).
+
+          ## Look
+
+          Brushed silver skin with blue Mode buttons (names painted underneath), rows of controls centred
+          on the screen, and the gltchsqnz logo with the title "Sync Filter" bottom right. `make_silver.py` draws it; the
+          logo size (`LOGO_PLATE`, about 1.5 cm on 7" MPCs) and colours are constants at the top of that file.
+
+          The double-tap / Enter edit overlays (big knob, menu) use the MPC's usual dark background (1.2.1; before,
+          they took the silver page colour and looked white).
+
+          ## Sync behaviour
+
+          - **Playing:** LFO phase = song position / cycle length. Bars follow the project's
+            time signature (a bar in 3/4 is 3 beats, so 64 bars = 192 beats).
+          - **Stopped:** the LFO free-runs at the project tempo, continuing from where
+            playback left off.
+          - The cycle restarts at the song start and every cycle length after it. Use
+            **Phase** to move the sweep's start point.
+
+          ## Notes
+
+          - Saw Up with a long Rate is a filter riser; Saw Down is a long fade-out of the sweep.
+          - Square makes hard steps, softened by a few ms of smoothing to avoid clicks.
+          - The BP mode is quieter than LP/HP at low resonance; raise Reso or Level.
+          - CPU is very low: coefficients update every 16 samples, per-sample work is one SVF per channel.
+
+          ## Knob FX mapping
+
+          The SDK requires effects to declare one. It only matters on an MPC Sample:
+          knobs Cutoff / Depth / Rate; SHIFT + knobs Reso / Mix / Shape.
+
+          ## Licence
+
+          MIT. Built on the MPC Plugin SDK's `dsp/svf.h` (Cytomic/Simper topology) and `dsp/tempo.h`.
+          SYNCEOF
+          mkdir -p "$(dirname "src/SyncFilter.cpp")"
+          cat > "src/SyncFilter.cpp" <<'SYNCEOF'
+          // Sync Filter - an MPC insert effect plugin by gltchsqnz
+          // (released as "Sweep Filter" up to 1.1.1; renamed in 1.2.0 with the same uid, parameters and programs)
+          //
+          // A tempo-synced auto filter. An LFO sweeps the cutoff of a stereo state-variable
+          // filter. The LFO cycle can be anything from 1/16 note up to 64 bars.
+          //
+          // Signal flow:
+          //     in -> SVF (LP / BP / HP / Notch) -> dry/wet Mix -> Level -> out
+          //                 ^
+          //                 | cutoff = Cutoff * 2^(LFO * Depth * 4)      (sweep in octaves)
+          //
+          // Sync:
+          //   * While the MPC is PLAYING, the LFO phase is computed straight from the song
+          //     position (ppq), so it is locked to the bars of the project: loops, jumps and
+          //     starting playback mid-song all land on the right point of a 32/64 bar sweep.
+          //   * While STOPPED, the LFO free-runs at the project tempo, so you still hear it.
+          //   * Bar lengths follow the project's time signature.
+          //
+          // Parameters (order is permanent once released; append new ones at the END):
+          //   0 Level      output volume (dB)  - harmless on load, as the host nudges param 0
+          //   1 Mode       LP / BP / HP / Notch
+          //   2 Cutoff     centre frequency of the sweep (Hz)
+          //   3 Reso       filter resonance (%)
+          //   4 Depth      sweep width, 100% = +/- 4 octaves
+          //   5 Rate       LFO cycle length: 1/16 .. 1/2 note, then 1 .. 64 bars
+          //   6 Shape      Sine / Triangle / Saw Up / Saw Down / Square
+          //   7 Phase      shifts the sweep within its cycle (%)
+          //   8 Mix        dry/wet (%)
+          //
+          // CPU: the filter coefficients (one tan()) and LFO are updated every kCtrl samples;
+          // per sample there is only the SVF arithmetic and the smoothers.
+
+          #include "mpc_plugin.h"
+          #include "dsp/math.h"
+          #include "dsp/svf.h"
+          #include "dsp/tempo.h"
+
+          #include <algorithm>
+          #include <cmath>
+
+          using namespace mpc::dsp;
+
+          namespace {
+
+          enum ParamIndex
+          {
+              kLevel = 0,  // dB
+              kMode,       // choice
+              kCutoff,     // Hz
+              kReso,       // %
+              kDepth,      // %
+              kRate,       // choice (see kRates)
+              kShape,      // choice
+              kPhase,      // %
+              kMix,        // % wet
+              kNumParams
+          };
+
+          constexpr int kMaxChannels = 2;
+          constexpr int kCtrl        = 16;     // control-rate block (samples)
+          constexpr float kSweepOctaves = 4.0f; // Depth 100% = +/- this many octaves
+          constexpr double kTwoPi    = 6.283185307179586;
+
+          // LFO cycle lengths. Sub-bar lengths are in beats (quarter notes); the rest are in
+          // bars, converted with the project's time signature.
+          struct RateDef { const char* name; float beats; float bars; };
+          const RateDef kRates[] = {
+              {"1/16",     0.25f, 0.0f}, {"1/8",      0.5f, 0.0f}, {"1/4",  1.0f, 0.0f}, {"1/2", 2.0f, 0.0f},
+              {"1 bar",    0.0f,  1.0f}, {"2 bars",   0.0f, 2.0f}, {"4 bars",  0.0f, 4.0f},
+              {"8 bars",   0.0f,  8.0f}, {"16 bars",  0.0f, 16.0f}, {"32 bars", 0.0f, 32.0f}, {"64 bars", 0.0f, 64.0f}
+          };
+          constexpr int kNumRates = (int)(sizeof(kRates) / sizeof(kRates[0]));
+          constexpr int kDefaultRate = 6;      // 4 bars
+
+          enum Shape { kSine = 0, kTri, kSawUp, kSawDown, kSquare, kNumShapes };
+
+          // One-pole smoother, advanced once per control block.
+          struct Smooth
+          {
+              float v = 0.0f, rate = 0.1f;
+              void  snap(float x) { v = x; }
+              float next(float target) { v += rate * (target - v); return v; }
+          };
+
+          // Per-sample smoother for gain-type controls (avoids zipper noise).
+          struct SampleSmooth
+          {
+              float v = 0.0f, rate = 0.002f;
+              void  snap(float x) { v = x; }
+              float next(float target) { v += rate * (target - v); return v; }
+          };
+
+          // LFO shape, phase 0..1 -> -1..+1 (all start at 0 or at an extreme, see comments).
+          inline float lfoShape(int shape, float ph)
+          {
+              switch (shape)
+              {
+                  case kSine:    return std::sin((float)kTwoPi * ph);
+                  case kTri:     return ph < 0.25f ? 4.0f * ph : (ph < 0.75f ? 2.0f - 4.0f * ph : 4.0f * ph - 4.0f);
+                  case kSawUp:   return 2.0f * ph - 1.0f;
+                  case kSawDown: return 1.0f - 2.0f * ph;
+                  case kSquare:  return ph < 0.5f ? 1.0f : -1.0f;
+                  default:       return 0.0f;
+              }
+          }
+
+          } // namespace
+
+          class SyncFilter : public mpc::Plugin
+          {
+          public:
+              SyncFilter() : mpc::Plugin(makeInfo())
+              {
+                  using namespace mpc;
+
+                  std::vector<std::string> rateNames;
+                  for (int i = 0; i < kNumRates; ++i) rateNames.push_back(kRates[i].name);
+
+                  // ids are saved in projects: never rename them once released.
+                  addParam(floatParam ("level",  "Level",  -24.0f, 12.0f, 0.0f,    "dB", 1));
+                  addParam(choiceParam("mode",   "Mode",   {"LP", "BP", "HP", "Notch"}, 0));
+                  addParam(logParam   ("cutoff", "Cutoff", 40.0f, 16000.0f, 800.0f, "Hz", 0));
+                  addParam(floatParam ("reso",   "Reso",   0.0f, 100.0f, 30.0f,    "%",  0));
+                  addParam(floatParam ("depth",  "Depth",  0.0f, 100.0f, 60.0f,    "%",  0));
+                  addParam(choiceParam("rate",   "Rate",   rateNames, kDefaultRate));
+                  addParam(choiceParam("shape",  "Shape",  {"Sine", "Triangle", "Saw Up", "Saw Down", "Square"}, 0));
+                  addParam(floatParam ("phase",  "Phase",  0.0f, 100.0f, 0.0f,     "%",  0));
+                  addParam(floatParam ("mix",    "Mix",    0.0f, 100.0f, 100.0f,   "%",  0));
+
+                  // Built-in programs, plain values in parameter order:
+                  //        Level Mode Cutoff Reso Depth Rate Shape Phase Mix
+                  addProgram("Epic Rise",  {0.0f, 0, 500.0f,  45.0f, 75.0f, 10, kSawUp,   0.0f, 100.0f});  // 64 bars
+                  addProgram("Slow Rise",  {0.0f, 0, 600.0f,  40.0f, 70.0f, 9,  kSawUp,   0.0f, 100.0f});  // 32 bars
+                  addProgram("Long Sweep", {0.0f, 0, 800.0f,  30.0f, 60.0f, 8,  kSine,    0.0f, 100.0f});  // 16 bars
+                  addProgram("Wobble",     {0.0f, 0, 500.0f,  60.0f, 55.0f, 1,  kTri,     0.0f, 100.0f});  // 1/8
+                  addProgram("Bar Gate",   {0.0f, 1, 1200.0f, 70.0f, 80.0f, 4,  kSquare,  0.0f, 100.0f});  // 1 bar
+                  addProgram("Phaser Ish", {0.0f, 3, 1500.0f, 50.0f, 40.0f, 6,  kSine,    0.0f, 60.0f});   // 4 bars
+              }
+
+              void prepare(double sampleRate, int maxBlockSize) override
+              {
+                  (void)maxBlockSize;
+                  sampleRate_ = (float)sampleRate;
+                  for (int ch = 0; ch < kMaxChannels; ++ch) filters_[ch].setSampleRate(sampleRate);
+                  reset();
+              }
+
+              void reset() override
+              {
+                  for (int ch = 0; ch < kMaxChannels; ++ch) filters_[ch].reset();
+                  level_.snap(dbToGain(get(kLevel)));
+                  mix_.snap(get(kMix) * 0.01f);
+                  cutoff_.snap(get(kCutoff));
+                  reso_.snap(get(kReso) * 0.01f);
+                  depth_.snap(get(kDepth) * 0.01f);
+                  mod_ = 0.0f;
+                  freePhase_ = 0.0;
+              }
+
+              void process(mpc::ProcessContext& ctx) override
+              {
+                  const int numFrames   = ctx.numFrames;
+                  const int numChannels = mpc::clamp(ctx.numOutputs, 0, kMaxChannels);
+                  const mpc::Transport& t = ctx.transport;
+
+                  // --- read parameters once per block ---------------------------------
+                  const int   mode        = getInt(kMode);
+                  const int   shape       = mpc::clamp(getInt(kShape), 0, (int)kNumShapes - 1);
+                  const float phaseOffset = get(kPhase) * 0.01f;
+                  const float cutoffT     = get(kCutoff);
+                  const float resoT       = get(kReso) * 0.01f;
+                  const float depthT      = get(kDepth) * 0.01f;
+                  const float levelT      = dbToGain(get(kLevel));
+                  const float mixT        = get(kMix) * 0.01f;
+
+                  // --- LFO cycle length in beats --------------------------------------
+                  const RateDef& r = kRates[mpc::clamp(getInt(kRate), 0, kNumRates - 1)];
+                  const double beatsPerBar = (t.timeSigNumerator > 0 && t.timeSigDenominator > 0)
+                                                 ? 4.0 * (double)t.timeSigNumerator / (double)t.timeSigDenominator
+                                                 : 4.0;
+                  const double cycleBeats = r.bars > 0.0f ? (double)r.bars * beatsPerBar : (double)r.beats;
+
+                  const bool   locked       = t.playing && t.ppqValid;
+                  const double ppqPerSample = (double)safeBpm(t.bpm) / 60.0 / (double)sampleRate_;
+
+                  for (int start = 0; start < numFrames; start += kCtrl)
+                  {
+                      const int len = std::min(kCtrl, numFrames - start);
+
+                      // LFO phase: locked to song position while playing, free-running otherwise.
+                      double ph;
+                      if (locked)
+                      {
+                          // Double precision matters here: 64 bars = 256 beats of song position.
+                          const double cycles = (t.ppqPos + (double)start * ppqPerSample) / cycleBeats;
+                          ph = cycles - std::floor(cycles);
+                          freePhase_ = ph;                       // so stopping continues smoothly
+                      }
+                      else
+                      {
+                          ph = freePhase_;
+                          freePhase_ += (double)len * ppqPerSample / cycleBeats;
+                          freePhase_ -= std::floor(freePhase_);
+                      }
+
+                      double pho = ph + (double)phaseOffset;
+                      pho -= std::floor(pho);
+
+                      // Smooth the LFO (kills the hard edges of square/saw) and the controls.
+                      mod_ += 0.15f * (lfoShape(shape, (float)pho) - mod_);
+                      const float cutoff = cutoff_.next(cutoffT);
+                      const float reso   = reso_.next(resoT);
+                      const float depth  = depth_.next(depthT);
+
+                      const float freq = cutoff * std::exp2(mod_ * depth * kSweepOctaves);
+                      for (int ch = 0; ch < numChannels; ++ch) filters_[ch].set(freq, reso);
+
+                      for (int n = 0; n < len; ++n)
+                      {
+                          const int i = start + n;
+                          const float level = level_.next(levelT);
+                          const float mix   = mix_.next(mixT);
+
+                          for (int ch = 0; ch < numChannels; ++ch)
+                          {
+                              const float dry = (ctx.inputs != nullptr && ch < ctx.numInputs && ctx.inputs[ch] != nullptr)
+                                                    ? ctx.inputs[ch][i] : 0.0f;
+                              const float wet = filters_[ch].process(dry, mode);
+                              ctx.outputs[ch][i] = (dry + (wet - dry) * mix) * level;
+                          }
+                      }
+                  }
+              }
+
+              void parameterChanged(int index, float plainValue) override { (void)index; (void)plainValue; }
+
+          private:
+              static mpc::PluginInfo makeInfo()
+              {
+                  mpc::PluginInfo info;
+                  info.name         = "Sync Filter";
+                  info.vendor       = "gltchsqnz";   // must match plugin.json "manufacturer"
+                  info.uniqueId     = MPC_FOURCC(kUid[0], kUid[1], kUid[2], kUid[3]);   // must match plugin.json "uid"
+                  info.version      = 1210;           // 1.2.1.0
+                  info.isInstrument = false;
+                  info.numInputs    = 2;
+                  info.numOutputs   = 2;
+                  info.tailSamples  = 1;              // no tail
+                  return info;
+              }
+
+              static constexpr char kUid[5] = "GZsr";
+
+              static float dbToGain(float dB) { return std::pow(10.0f, dB / 20.0f); }
+
+              SVF          filters_[kMaxChannels];
+              SampleSmooth level_, mix_;
+              Smooth       cutoff_, reso_, depth_;
+              float        mod_        = 0.0f;
+              double       freePhase_  = 0.0;
+              float        sampleRate_ = 44100.0f;
+          };
+
+          MPC_PLUGIN_ENTRY(SyncFilter)
+          SYNCEOF
+          mkdir -p "$(dirname "make_silver.py")"
+          cat > "make_silver.py" <<'SYNCEOF'
+          #!/usr/bin/env python3
+          """Sync Filter - brushed silver skin.
+
+          Draws a brushed-aluminium version of the SDK's UI kit (knobs, faders, blue segment buttons)
+          and a brushed page background, then runs the SDK's own gen_ui.py on ui.json. On top of the
+          plain generator output it
+            * centres every row of controls (and its Q-Link rectangle) on the screen,
+            * paints the gltchsqnz logo (about 1.5 cm) bottom right, with the bold title to its left,
+            * paints the Mode names (LP / BP / HP / Notch) in black under the segment buttons.
+          The logo, title and button names are pixels in the page background, so they always show.
+
+          The result goes to ./skins/, which build.py copies verbatim into "Plugin Skins/".
+
+          Needs build/params.json first:   python tools/build.py "plugins/Sync Filter" --target native
+          Run from anywhere:               python "plugins/Sync Filter/make_silver.py"
+          Optional preview sheet:          ... make_silver.py --preview preview.png
+
+          Standard library only. Nothing here changes the SDK; the silver theme is registered
+          inside this process only.
+          """
+
+          import base64
+          import math
+          import os
+          import shutil
+          import struct
+          import sys
+          import zlib
+
+          HERE = os.path.dirname(os.path.abspath(__file__))
+          SDK = os.path.dirname(os.path.dirname(HERE))          # plugins/<Name>/ -> SDK root
+          sys.path.insert(0, os.path.join(SDK, "tools"))
+
+          import make_ui_kit as K   # noqa: E402
+          import gen_ui             # noqa: E402
+
+          ACCENT = "ff1d5fd6"       # the lit colour (knob arcs, fader fill). Change it here.
+
+          # Button colours (brushed blue).
+          BTN_OFF = ((70, 120, 215, 255), (36, 78, 170, 255))     # top -> bottom, resting
+          BTN_ON = ((90, 158, 255, 255), (40, 112, 238, 255))     # top -> bottom, selected
+          BTN_EDGE_ON = (205, 228, 255, 255)
+          BTN_EDGE_OFF = (16, 40, 92, 255)
+
+          # Logo and text on the page.
+          LOGO_PLATE = 128          # logo size in screen pixels: about 1.5 cm on the 7" MPC screens (~85 px/cm)
+          LOGO_MARGIN = 26          # gap from the bottom-right corner of the screen
+          TITLE_GAP = 24            # gap between the title and the logo
+          TITLE_DESCENT = 8         # rows of the title mask below its baseline (the tail of the y)
+          TEXT_BLACK = (14, 15, 17)
+          BLOCK_SHIFT = -20         # nudge the control block up a little to leave room for the logo band
+
+          LOGO = (                  # the gltchsqnz invader, 8 x 7 cells
+              ".#....#.",
+              "..#..#..",
+              ".######.",
+              "##.##.##",
+              "########",
+              ".#....#.",
+              "..#..#..",
+          )
+
+          SILVER_GREYS = {
+              "bg":         "ffc4c7cd",   # page colour
+              "body":       "ffb4b8bf",   # knob / button body
+              "bodyLight":  "fff0f1f4",   # lit edge
+              "bodyDark":   "ff6f737b",   # shaded edge, grooves
+              "track":      "ff7c8089",   # unfilled arc / fader groove
+              "outline":    "ff25272b",
+              "pointer":    "ff1e2023",   # dark pointer on the light knob face
+              "thumb":      "ffd0d3d8",
+              "thumbLight": "fff4f5f7",
+              "thumbDark":  "ff9a9ea6",
+              "ledOff":     "ff9a9ea6",
+              "textOn":     "ff111214",
+          }
+
+          # Pre-rendered bold text (Poppins Bold, SIL OFL), 8-bit alpha, zlib + base64.
+          # name: (width, height, data). Generated by a one-off helper; see make_silver.py.
+          TEXT_MASKS = {
+              "title": (164, 34,
+                  "eNrNl0lMFEEUhh8DqCMJuGCiKIIKGA4a4wWjB5VoFDkRMRIXNB5QQ8QtLhEV3DeimTmQCAkcRINblGQObmwG3DUg"
+                  "BHAXcRBk0QjiwABtv1e9MzM4LKbrMn+9qvrr6+56r3sA/kczmhoaTEbQdTNxfDPpm7ERGRtQoeDidMvYOBjGwOQH"
+                  "9baOOkvSmKFi4lQNwCw9a5nRHVrP452i2c+Nw8RoNDc2mo0DZ8xV2u0bHkbNiLuMa1R2PXP1yFhIc1sLntlJZANU"
+                  "4O8fXzacRNH5omP0bWvnt1tR8vKJB0ta7D9enQ/vy/jKIjSAOIlVJOtzCf57Cr/bf1dnLVVfTKDpXTK0oi72AQiq"
+                  "QfUJIJGGN7GpT1GXCUvWXRFsszwFp4QOIdJrHunwbrHWP+OGdrF7f5LCYiGPlwq/UW/G6KoSvj0A8G3DUAHNDKWp"
+                  "CcKSj5LvObZ3umKruyMGwWhS9JtCpYnJvzhkrER900P5pC7SyZyCMpXS3Ud7wriemXTxqtiZgTOuUxmVG8WJNo4Y"
+                  "j1Mnf6lBdpxDob0o36Iyy1lgLbLKN3LcL5Jf7tfSb1egw/PomNFikebIRvkvutjtU6VdKoz9wNRXc4S0xWMMvOZF"
+                  "BA2FS0sOeIDHIVJP+dgOUmcNYDhG6ojDvHbMqLrXZPQnjn+YAfkoP2sYYepzsVO11ZttEU/d2cL7oUByLKLRhyib"
+                  "eXEXxQdMH0N6Dt8ODJSRjE6SDKZwiGhRtMifvWjWPxL9KkIoMqqZbhB40Xs2VnJkFX4/ym5eWGVrF/XxHxitmtPO"
+                  "LReGy71kz6BdJb0UrJtA/TR6+oYoOoJekuMaGlwrbtgllYRBMnZpGVeKea22nXadoheoE0LEkTnCcVA7xqkYE5wy"
+                  "usxr14zLhOH1WuNMjNYwfQ/1Nayr9gCnjPX4e2IIGMloi3OL5na+bUO1GaMdLBojXdINcMpIR/095UxGLt8ODZTx"
+                  "Dso7JJdt5FusxoIqYN10AL8nYtpjHn0VGSOdM+4kcYqvPazIprjFSC+/ozS8nS3nD35MN6pLGgszq7+Pi1kdvSq4"
+                  "pgiI1eCccTy9NLlaoYZ3TnaL8Q295kuxho9le3/Lr2KbLtBYTOtQndZ5gmsA+wziklwwwibV0qPuncdMReKvVRll"
+                  "97GIVmbVYcn2JvXb/VwxQoZiaZ6Xe4yz7IridF5hVDS6r8XiN+JoW6Jsu4QiGeCSERJt4kdGmrebeQ3xNsW3WXyb"
+                  "aJTu48hixOrLNT9stYU7Jyq2WUST5vTDCAEppa3dP1+mhbldewDCzJXt8jfu3sIme0vZudlOLBy1PJzzSNf/2mf0"
+                  "0Ie3rhmpJDWN1DOiHx3h07q+jbspxYL1jOj5CRktur6NsZT5K3TNWEL/VA06ofkLk2ffKg=="),
+              "LP": (21, 14,
+                  "eNr7//t/NQMLEDb8//3/z5+fD+YoMTD9RxYEg6f6DEiCf34d2nvh/8//R5FV/n/FwsDQD5TTQhZ8LcTKYPn/"
+                  "z38nQir//Dq49/z/H/8PYrH9mS4jsuDfN69fXpooC3ZnDRMbExvIzDeyggKMDAxMIHeWMoAAyHYuIM3MxMDw"
+                  "/9//u3v37l3CUA8U5GdkYgQp+A81HSzIxwAWAwn+/fPrzw0UQQCPvpks"),
+              "BP": (24, 14,
+                  "eNpFkL1qAlEQhY8/QRBFg4XkIXyAVCEsvoGQF0gbsFELK8kD2NimyDMIQYO7mqSKKQNio3b+EkIKBXfv7snc"
+                  "66rTzcdw5psh6SvlrdvXiMOhCpS3HTWS4LG2FjQ/NG+XDDix7TH3HEaF+z+2PaPLFj3WgGSbwSqDPvkCpD8C"
+                  "tRBeAfBIf5KQeb5epFCn2kvi0611vySrOv88H9bfg/GR/N5UljWPfPecj559+hmTU7z7JjuGu5vN/LOWQLjX"
+                  "ErcCBqSTzaWljxw8RcHljeYdDeMRmLucL3nA7kr7dzWUOv2BZePZRQwh13/7fS8ZzxP/B/eo1dE="),
+              "HP": (26, 14,
+                  "eNr7//t/NQMLM4Pj/9//nRiagOSfPz8fzFFiYPqPIQMGT/UZ0GX+/Dq098L/n/+PgvTUsnCws7hAZf6/YmFg"
+                  "6Acq0AIKFDIAgTFM5rUQK4Pl/z//nf7//b+3vrGxfgGIg6oHDv5C7Tm49/z/H/8PMqHLQN32TJcRaMhcRxcX"
+                  "xyKoab//vnn98tJEWbB/SkAuMIe54I2soAAjAwMTyD+1zOxszM5wt3EB1TEzMWD49P9rfkYmRpApmDJ8DGAJ"
+                  "PDIAHJDMhA=="),
+              "NOTCH": (60, 15,
+                  "eNpVkk1IVFEUx//33fdmRmv8GIfcFNEXWJEUWC6iTNOJiBYRKEa1KCiwdoFBVmqaBC11US2iL3LRQtIiHFHJ"
+                  "UsTBQIQ2lbqIiJH8CHScN+/d07nvGdl5j3fvOZzfOe98xKpiOyAA80gstk1f1kg4Egn/ZxDInyNqgOmrRDSd"
+                  "Z0jkLBK1aqOQLDqGlK+Ss13S8iBpSuMfG5Bag1IZeshMTlKpRj6lH5IPA71Eg381LYbP3jQ8xcvrUBmQM0vU"
+                  "BNOALK2tLZXsHjw0ptSn8jKT3bIPn63Zp2Noth57a2uK/H/OqM9ZItdjA6ieZAtNVkNElkjxdSkicHlaG4dL"
+                  "4LFt7RmG2qVBXuJWFHgs6mhV6hC1PdaOooF8r/k9KJgjtazzuXQL5NJwyk3vNjngHRTZjrP09FnKceytoRdJ"
+                  "omRXZ2CnstXco9dMjBv58wxMdPST4/zMowzV3ScaCnHeFrSRbVcCx2ybmoG3RH1cVhtlUgeA5uGhDxuyF0iN"
+                  "ZwOPyXFLma3PmnXp9hed952iMVgWEqS6IePcZxlCj6JRWF5zha63CetEFZdQwWwjzpOzknKYHSSKC8sScS+j"
+                  "npEMoo+NhunPKaLnK4IoX2UbBHq4igz/80ulvgeArB9KPfHYOPs/V2qGl2XLieMnw+F5vRtrWBibfzuuZs/R"
+                  "CnXuKu7i4zTwxlUzFftxhrUHOw5OEaVy1y+sYd20ewMhXCU77TYiNEY2d4E/Q6aFewzRYm5wktL88HsN0V8u"
+                  "+zPr2m45d74RlhTv+XIXxsYRf7wDhUKKTdw/Wo5i+4Rv7BCIpLR/EEdZrUyMJi7w2qN4dCRxCRaCVwamvvVe"
+                  "lLz3AoUtfYn+sED4+seZr92n2BLuT7B/ACXMlfwBlUO8lw=="),
+          }
+
+
+          # --------------------------------------------------------------------------------------------
+          # Brushed-metal noise (deterministic: same skin on every build)
+          # --------------------------------------------------------------------------------------------
+          def h01(n):
+              """Integer hash -> 0..1."""
+              n = (int(n) * 0x9E3779B1) & 0xFFFFFFFF
+              n ^= n >> 15
+              n = (n * 0x85EBCA77) & 0xFFFFFFFF
+              n ^= n >> 13
+              return (n & 0xFFFF) / 65535.0
+
+
+          def streak(x, y, seed):
+              """About -1.2 .. +1.2: long thin horizontal brush lines, broken into short runs."""
+              row = h01(int(y) * 977 + seed)
+              run = h01(int(y) * 131 + (int(x) // 41) * 7919 + seed + 5)
+              fine = h01(int(x) * 31 + int(y) * 1009 + seed + 11)
+              return (row - 0.5) * 1.2 + (run - 0.5) * 0.9 + (fine - 0.5) * 0.25
+
+
+          def clamp8(v):
+              return max(0, min(255, int(round(v))))
+
+
+          def shade(c, d):
+              return (clamp8(c[0] + d), clamp8(c[1] + d), clamp8(c[2] + d), c[3])
+
+
+          def brushed(y0, y1, c0, c1, seed, amp=7.0):
+              """Vertical gradient c0 -> c1 with horizontal brushing on top."""
+              base = K.vgrad(y0, y1, c0, c1)
+              return lambda px, py: shade(base(px, py), streak(px, py, seed) * amp)
+
+
+          # --------------------------------------------------------------------------------------------
+          # Drawing overrides (same geometry as the SDK kit, silver surfaces)
+          # --------------------------------------------------------------------------------------------
+          def turned(cx, cy, radius, seed=3):
+              """Turned-aluminium knob face: concentric brush lines and a two-lobed highlight."""
+              light = -0.75 * math.pi
+
+              def f(px, py):
+                  dx, dy = px - cx, py - cy
+                  rad = math.hypot(dx, dy)
+                  lobes = math.cos(2.0 * (math.atan2(dy, dx) - light))
+                  ring = h01(int(rad * 2.4) + seed * 101) - 0.5
+                  fine = h01(int(px * 13) + int(py * 29) * 7 + seed) - 0.5
+                  lum = 188 + 30 * lobes * (0.35 + 0.65 * min(1.0, rad / radius)) + ring * 16 + fine * 4
+                  return (clamp8(lum), clamp8(lum + 1), clamp8(lum + 4), 255)   # a touch cool
+              return f
+
+
+          def knob_static(size, th):
+              c = K.Canvas(size, size)
+              cx = cy = size / 2.0
+              r = size / 2.0
+              ring_out, ring_in = r - 1.0, r - max(4.0, size * 0.1)
+              body_r = ring_in - max(3.0, size * 0.07)
+              K.arc(c, cx, cy, ring_in, ring_out, -K.SWEEP / 2.0, K.SWEEP / 2.0, th["track"])
+              K.circle(c, cx, cy + 1.5, body_r + 1.0, K.with_alpha(th["outline"], 150))
+              K.circle(c, cx, cy, body_r, K.light_rim(cx, cy, th["bodyLight"], th["bodyDark"]))
+              face_r = body_r - max(1.5, size * 0.035)
+              K.circle(c, cx, cy, face_r, turned(cx, cy, face_r))
+              return c, (cx, cy, ring_in, ring_out, body_r, face_r)
+
+
+          def fader_cap(g, th):
+              w, h = g["cap_len"], g["cap_th"]
+              c = K.Canvas(w + 2, h + 4)
+              K.rrect(c, 1, 3, w, h, 5.0, K.with_alpha(th["outline"], 170))
+              K.rrect(c, 1, 1, w, h, 5.0, brushed(1, 1 + h, th["thumbLight"], th["thumbDark"], 23, 6.0))
+              K.rrect_outline(c, 1, 1, w, h, 5.0, 1.0, K.with_alpha(th["outline"], 180))
+              cx = 1 + w / 2.0
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 2.0, th["accentDark"])
+              K.capsule(c, cx, 1 + h * 0.28, cx, 1 + h * 0.72, 1.4, th["accent"])
+              return c
+
+
+          def render_button(th, on, w=120, h=44, led=True):
+              """Blue brushed key: deep blue at rest, bright lit blue when selected."""
+              c = K.Canvas(w, h)
+              rad = 8.0
+              K.rrect(c, 1, 3, w - 2, h - 4, rad, K.with_alpha(th["outline"], 150))
+              top, bottom = BTN_ON if on else BTN_OFF
+              K.rrect(c, 1, 1, w - 2, h - 4, rad, brushed(1, h - 3, top, bottom, 17, 6.0))
+              K.rrect_outline(c, 1, 1, w - 2, h - 4, rad, 2.0 if on else 1.0, BTN_EDGE_ON if on else BTN_EDGE_OFF)
+              if on and not led:
+                  K.rrect(c, 10, h - 9, w - 20, 3, 1.5, BTN_EDGE_ON)
+              if led:
+                  lx, ly, lw, lh = 11, (h - 4) / 2.0 + 1 - 9, 6, 18
+                  if on:
+                      K.rrect(c, lx - 3, ly - 3, lw + 6, lh + 6, 6.0, th["accentGlow"])
+                  K.rrect(c, lx, ly, lw, lh, 3.0, BTN_EDGE_ON if on else th["ledOff"])
+              return c.rows(), w
+
+
+          # --------------------------------------------------------------------------------------------
+          # Layout: centre every row of controls (and its Q-Link rectangle); centre the block vertically
+          # --------------------------------------------------------------------------------------------
+          GRID_GAP = gen_ui.SLOT_X[1] - gen_ui.SLOT_X[0] - gen_ui.SLOT_W      # the grid's normal gap (42 px)
+
+
+          def row_x(page, row):
+              """{column: x} of the occupied slots in a grid row, packed with the normal gap and centred."""
+              cols = [c for c in range(4)
+                      if row * 4 + c < len(page.controls) and page.controls[row * 4 + c].widget != "empty"]
+              total = len(cols) * gen_ui.SLOT_W + max(0, len(cols) - 1) * GRID_GAP
+              x0 = (gen_ui.SCREEN_W - total) // 2
+              return {c: x0 + j * (gen_ui.SLOT_W + GRID_GAP) for j, c in enumerate(cols)}
+
+
+          SEG_Y = 46          # top of the Mode buttons inside their slot (the SDK uses 54); leaves room for the names below
+
+
+          def radio_component(style, overlay_name, n):
+              """gen_ui.radio_component with the segment buttons raised to SEG_Y so their names fit inside the slot."""
+              width, xs = gen_ui.SEGMENTS[n]
+              children = [gen_ui.focus_child(style),
+                          gen_ui.entry("name", "Label", gen_ui.label_data("Name", style["muted"], 24.0), "15 8 248 34",
+                                       "No", "Show", "Always")]
+              for i, x in enumerate(xs):
+                  children.append(gen_ui.entry("seg %d" % i, "Button",
+                                               gen_ui.button_data("seg%d_on.png" % n, "seg%d_off.png" % n, i, n),
+                                               "%d %d %d 40" % (x, SEG_Y, width), "No", "Show", "Always"))
+              return gen_ui.component_definition(gen_ui.control_actions(overlay_name, double_click=False), children,
+                                                 "00000000")
+
+
+          def tab_component(page, style):
+              """gen_ui.tab_component with centred rows and without the on-button caption labels
+              (the Mode names are painted under the buttons in the page background instead)."""
+              children = []
+              for i, ctl in enumerate(page.controls):
+                  row, col = divmod(i, 4)
+                  if ctl.widget == "empty":
+                      continue
+                  bounds = "%d %d %d %d" % (row_x(page, row)[col], gen_ui.SLOT_Y[row], gen_ui.SLOT_W, gen_ui.SLOT_H)
+                  invalidating = None
+                  if ctl.visible:
+                      vp, idx = ctl.visible
+                      invalidating = ["IndexedEnabling/%d/%d/%s" % (idx, len(vp.choices), vp.handle)]
+                  if ctl.widget == "text":
+                      children.append(gen_ui.entry("text %d" % i, "Label",
+                                                   gen_ui.label_data("Text", style["text"], 30.0, "left", ctl.text),
+                                                   bounds, "No", "Show", "Always", invalidating=invalidating))
+                      continue
+                  children.append(gen_ui.entry(ctl.param.name, ctl.definition,
+                                               gen_ui.obj(("version", 1), ("handleName", "Data")), bounds,
+                                               "Yes", "Hide", "Always", remap=[("Data", ctl.param.handle)],
+                                               invalidating=invalidating))
+              return gen_ui.component_definition([], children, style["background"], bg_image=page.background)
+
+
+          _orig_qlink_rects = gen_ui.qlink_rects
+
+
+          def qlink_rects(page, groups="columns"):
+              """Q-Link rectangles around each (centred) row of controls."""
+              if groups != "rows":
+                  return _orig_qlink_rects(page, groups)
+              pad, out = gen_ui.QLINK_PAD, []
+              for r in range(4):
+                  xs = row_x(page, r)
+                  cs = [c for c in xs if page.controls[r * 4 + c].param is not None]
+                  if not cs:
+                      continue
+                  x = max(xs[min(cs)] - pad, 2)
+                  y = max(gen_ui.SLOT_Y[r] - pad, 2)
+                  x2 = min(xs[max(cs)] + gen_ui.SLOT_W + pad, gen_ui.SCREEN_W - 2)
+                  y2 = min(gen_ui.SLOT_Y[r] + gen_ui.SLOT_H + pad, gen_ui.SCREEN_H - 2)
+                  out.append("%d %d %d %d" % (x, y, x2 - x, y2 - y))
+              return out
+
+
+          def centre_vertically(page):
+              """Shift the grid rows so the rows in use sit in the middle of the 628 px tab."""
+              used = max(i // 4 for i, c in enumerate(page.controls) if c.widget != "empty") + 1
+              block = (gen_ui.SLOT_Y[used - 1] + gen_ui.SLOT_H) - gen_ui.SLOT_Y[0]
+              dy = (gen_ui.SCREEN_H - block) // 2 - gen_ui.SLOT_Y[0] + BLOCK_SHIFT
+              gen_ui.SLOT_Y = [y + dy for y in gen_ui.SLOT_Y]
+
+
+          def caption_spots(page):
+              """[(text, centre x, top y)] for the names under every segmented choice switch."""
+              spots = []
+              for i, ctl in enumerate(page.controls):
+                  if ctl.widget == "empty" or not ctl.definition.startswith("radio"):
+                      continue
+                  row, col = divmod(i, 4)
+                  width, xs = gen_ui.SEGMENTS[len(ctl.param.choices)]
+                  for choice, x in zip(ctl.param.choices, xs):
+                      spots.append((choice, row_x(page, row)[col] + x + width / 2.0, gen_ui.SLOT_Y[row] + SEG_Y + 42))
+              return spots
+
+
+          # --------------------------------------------------------------------------------------------
+          # Page background: brushed aluminium, 1280 x 628 (the tab area, drawn 1:1), logo, title, captions
+          # --------------------------------------------------------------------------------------------
+          def write_png_rgba(path, width, rows):
+              def chunk(tag, data):
+                  body = tag + data
+                  return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+              raw = b"".join(b"\0" + bytes(r) for r in rows)
+              png = b"\x89PNG\r\n\x1a\n"
+              png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, len(rows), 8, 6, 0, 0, 0))
+              png += chunk(b"IDAT", zlib.compress(raw, 9))
+              png += chunk(b"IEND", b"")
+              with open(path, "wb") as f:
+                  f.write(png)
+
+
+          def draw_logo():
+              """The invader on a black plate (a canvas with room for the drop shadow), LOGO_PLATE px square.
+              Cell geometry is measured from the supplied 512 px logo and scaled."""
+              s = LOGO_PLATE / 512.0
+              pad, size = 6, LOGO_PLATE
+              c = K.Canvas(size + 2 * pad, size + 2 * pad)
+              rad = size * 0.11
+              K.rrect(c, pad, pad + 3, size, size, rad, (0, 0, 0, 110))
+              K.rrect(c, pad, pad, size, size, rad, K.vgrad(pad, pad + size, (24, 25, 28, 255), (2, 2, 3, 255)))
+              K.rrect_outline(c, pad, pad, size, size, rad, 1.0, (112, 116, 124, 255))
+              for r, line in enumerate(LOGO):
+                  for col, ch in enumerate(line):
+                      if ch == "#":
+                          K.rrect(c, pad + (85 + 43.57 * col) * s, pad + (99 + 43.0 * r) * s, 37 * s, 37 * s, 1.0,
+                                  (248, 250, 253, 255))
+              return c, pad
+
+
+          def blend_canvas(rows, canvas, x0, y0):
+              for y in range(canvas.h):
+                  row = rows[y0 + y]
+                  for x in range(canvas.w):
+                      r, g, b, a = canvas.px[y * canvas.w + x]
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + x) * 4
+                      row[i] = clamp8(row[i] + (r - row[i]) * a)
+                      row[i + 1] = clamp8(row[i + 1] + (g - row[i + 1]) * a)
+                      row[i + 2] = clamp8(row[i + 2] + (b - row[i + 2]) * a)
+
+
+          def text_size(name):
+              w, h, _ = TEXT_MASKS[name]
+              return w, h
+
+
+          def blend_text(rows, name, x0, y0, colour):
+              w, h, packed = TEXT_MASKS[name]
+              alpha = zlib.decompress(base64.b64decode(packed))
+              for yy in range(h):
+                  row = rows[y0 + yy]
+                  for xx in range(w):
+                      a = alpha[yy * w + xx] / 255.0
+                      if a <= 0.0:
+                          continue
+                      i = (x0 + xx) * 4
+                      for k in range(3):
+                          row[i + k] = clamp8(row[i + k] + (colour[k] - row[i + k]) * a)
+
+
+          def make_background(path, page, w=1280, h=628, seed=41):
+              base = K.parse_argb(SILVER_GREYS["bg"])
+              amp = 7.0
+              sheen = [7 * math.sin(x / 190.0 + 0.6) + 4 * math.sin(x / 53.0) + 5 * math.sin(x / 611.0) for x in range(w)]
+              runs = w // 41 + 2
+              rows = []
+              for y in range(h):
+                  fall = -((y / float(h)) - 0.5) * 8.0                  # slightly lighter at the top
+                  row_n = (h01(y * 977 + seed) - 0.5) * 1.2 * amp
+                  run_n = [(h01(y * 131 + k * 7919 + seed + 5) - 0.5) * 0.9 * amp for k in range(runs)]
+                  row = bytearray(w * 4)
+                  for x in range(w):
+                      fine = (h01(x * 31 + y * 1009 + seed + 11) - 0.5) * 0.25 * amp
+                      d = sheen[x] + fall + row_n + run_n[x // 41] + fine
+                      i = x * 4
+                      row[i] = clamp8(base[0] + d)
+                      row[i + 1] = clamp8(base[1] + d)
+                      row[i + 2] = clamp8(base[2] + d * 1.05)
+                      row[i + 3] = 255
+                  rows.append(row)
+
+              # logo, bottom right
+              logo, pad = draw_logo()
+              plate_x = w - LOGO_MARGIN - LOGO_PLATE
+              plate_y = h - LOGO_MARGIN - LOGO_PLATE
+              blend_canvas(rows, logo, plate_x - pad, plate_y - pad)
+              # title, to the left of the logo, its baseline level with the bottom of the invader artwork
+              # (its last row of cells, measured on the 512 px logo and scaled), not the edge of the plate
+              tw, th = text_size("title")
+              art_bottom = plate_y + int(round((99 + 43.0 * (len(LOGO) - 1) + 37) * LOGO_PLATE / 512.0))
+              blend_text(rows, "title", plate_x - TITLE_GAP - tw, art_bottom - (th - TITLE_DESCENT), TEXT_BLACK)
+              # names under the segment buttons
+              for text, cx, top in caption_spots(page):
+                  key = text.upper()
+                  if key not in TEXT_MASKS:
+                      print('make_silver: no pre-rendered text for "%s"; that button name is not drawn.' % text)
+                      continue
+                  cw, _ = text_size(key)
+                  blend_text(rows, key, int(round(cx - cw / 2.0)), int(top), TEXT_BLACK)
+              write_png_rgba(path, w, rows)
+
+
+          # --------------------------------------------------------------------------------------------
+          # The double-tap / Enter overlays (KnobOverlay, MenuOverlay) are full-screen components whose background
+          # gen_ui sets to the page colour; on the MPC that made them near-white. Keep them on the SDK's dark colour.
+          OVERLAY_BG = "ff1e1d1e"
+
+
+          def install_theme():
+              _overlay_component = gen_ui.overlay_component
+              gen_ui.overlay_component = lambda type_name, data, _bg: _overlay_component(type_name, data, OVERLAY_BG)
+              gen_ui.tab_component = tab_component
+              gen_ui.radio_component = radio_component
+              gen_ui.qlink_rects = qlink_rects
+              K.GREYS.update(SILVER_GREYS)
+              K.THEMES["silver"] = ACCENT
+              K.knob_static = knob_static
+              K.fader_cap = fader_cap
+              K.render_button = render_button
+
+
+          def main(argv):
+              install_theme()
+              if len(argv) >= 3 and argv[1] == "--preview":
+                  K.render_preview(argv[2], K.make_theme("silver"))
+                  return 0
+              params = os.path.join(HERE, "build", "params.json")
+              ui = os.path.join(HERE, "ui.json")
+              out = os.path.join(HERE, "skins")
+              if not os.path.isfile(params):
+                  print("make_silver: build/params.json is missing. Run first:\n"
+                        '  python tools/build.py "plugins/Sync Filter" --target native')
+                  return 1
+              if os.path.isdir(out):
+                  shutil.rmtree(out)
+              os.makedirs(out)
+              pages = gen_ui.load_ui(ui, gen_ui.ParamTable(gen_ui.load_params(params)))[0]
+              centre_vertically(pages[0])
+              make_background(os.path.join(out, "silver_bg.png"), pages[0])
+              gen_ui.generate(params, ui, out, assets_dir=out, quiet=False, kit_cache=None)
+              print("make_silver: wrote %s (%d files)" % (out, len(os.listdir(out))))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          SYNCEOF
+      - name: First build (native) to list the parameters
+        run: python tools/build.py "plugins/Sync Filter" --target native
+      - name: Draw the brushed silver skin
+        run: python "plugins/Sync Filter/make_silver.py"
+      - name: Build, validate, make MPC folder
+        run: python tools/build.py "plugins/Sync Filter"
+      - name: Upload MPC plugin folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sync-Filter-MPC
+          path: plugins/Sync Filter/build/*VST*
+          if-no-files-found: error
